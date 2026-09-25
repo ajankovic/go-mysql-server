@@ -10209,6 +10209,14 @@ type QueryErrorTest struct {
 
 var ErrorQueries = []QueryErrorTest{
 	{
+		Query:       "SELECT CAST('2020-01-01 10:00:00' AS DATETIME(7))",
+		ExpectedErr: sql.ErrTooBigPrecision,
+	},
+	{
+		Query:       "SELECT CAST('10:00:00' AS TIME(7))",
+		ExpectedErr: sql.ErrTooBigPrecision,
+	},
+	{
 		Query:       "SELECT INTERVAL 1 DAY",
 		ExpectedErr: sql.ErrIntervalInvalidUse,
 	},
