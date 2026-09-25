@@ -15,7 +15,9 @@
 package queries
 
 import (
+	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -10217,6 +10219,10 @@ var ErrorQueries = []QueryErrorTest{
 		ExpectedErr: sql.ErrTooBigPrecision,
 	},
 	{
+		Query:       "SELECT COUNT(*) FROM " + selfJoin("mytable", 65),
+		ExpectedErr: sql.ErrTooManyTables,
+	},
+	{
 		Query:       "SELECT INTERVAL 1 DAY",
 		ExpectedErr: sql.ErrIntervalInvalidUse,
 	},
@@ -11194,6 +11200,15 @@ var VersionedViewTests = []QueryTest{
 			sql.NewRow("myview5"),
 		},
 	},
+}
+
+func selfJoin(table string, n int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s t0", table)
+	for i := 1; i < n; i++ {
+		fmt.Fprintf(&b, " JOIN %s t%d ON t%d.i = t%d.i", table, i, i-1, i)
+	}
+	return b.String()
 }
 
 func MustParseTime(layout, value string) time.Time {
