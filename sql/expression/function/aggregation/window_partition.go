@@ -233,6 +233,11 @@ func (i *WindowPartitionIter) materializeOutput(ctx *sql.Context) (sql.WindowBuf
 	var row sql.Row
 	var err error
 	for {
+		// The child has been drained, so the table iterators that notice a
+		// cancelled query are no longer called while the window computes.
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
 		row, err = i.compute(ctx)
 		if errors.Is(err, io.EOF) {
 			break
