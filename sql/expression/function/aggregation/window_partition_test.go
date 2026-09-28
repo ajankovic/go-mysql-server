@@ -249,6 +249,31 @@ func TestWindowPartition_MaterializeOutput(t *testing.T) {
 		require.Equal(t, expOutput, output)
 	})
 
+	t.Run("cancelled context", func(t *testing.T) {
+		cctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ctx := sql.NewEmptyContext().WithContext(cctx)
+		sum := &cancellingWindowFunction{WindowFunction: sumZ, cancel: cancel}
+		i := NewWindowPartitionIter(
+			&WindowPartition{
+				PartitionBy: partitionByX,
+				Aggs: []*Aggregation{
+					NewAggregation(sum, NewPartitionFramer()),
+				},
+			})
+		i.input = []sql.Row{
+			{int64(1), "forest", "leaf", 4},
+			{int64(2), "forest", "bark", 4},
+			{int64(3), "forest", "canopy", 6},
+		}
+		i.partitions = []sql.WindowInterval{{Start: 0, End: 3}}
+		i.outputOrdering = []int{0, 1, 2}
+		output, err := i.materializeOutput(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, output)
+		require.Equal(t, 1, sum.computed)
+	})
+
 	t.Run("nil input", func(t *testing.T) {
 		ctx := sql.NewEmptyContext()
 		i := NewWindowPartitionIter(
@@ -265,4 +290,18 @@ func TestWindowPartition_MaterializeOutput(t *testing.T) {
 		require.Equal(t, io.EOF, err)
 		require.ElementsMatch(t, nil, output)
 	})
+}
+
+// cancellingWindowFunction cancels the query the first time it computes a row,
+// standing in for a client that disconnects while a window is being evaluated.
+type cancellingWindowFunction struct {
+	sql.WindowFunction
+	cancel   context.CancelFunc
+	computed int
+}
+
+func (f *cancellingWindowFunction) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
+	f.computed++
+	f.cancel()
+	return f.WindowFunction.Compute(ctx, interval, buf)
 }
