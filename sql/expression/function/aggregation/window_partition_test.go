@@ -249,6 +249,28 @@ func TestWindowPartition_MaterializeOutput(t *testing.T) {
 		require.Equal(t, expOutput, output)
 	})
 
+	t.Run("cancelled context", func(t *testing.T) {
+		cctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctx := sql.NewEmptyContext().WithContext(cctx)
+		i := NewWindowPartitionIter(
+			&WindowPartition{
+				PartitionBy: partitionByX,
+				Aggs: []*Aggregation{
+					NewAggregation(sumZ, NewGroupByFramer()),
+				},
+			})
+		i.input = []sql.Row{
+			{int64(1), "forest", "leaf", 4},
+			{int64(2), "forest", "bark", 4},
+		}
+		i.partitions = []sql.WindowInterval{{0, 2}}
+		i.outputOrdering = []int{0, 1}
+		output, err := i.materializeOutput(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, output)
+	})
+
 	t.Run("nil input", func(t *testing.T) {
 		ctx := sql.NewEmptyContext()
 		i := NewWindowPartitionIter(
