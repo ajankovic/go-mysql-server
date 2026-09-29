@@ -10608,6 +10608,75 @@ where
 		},
 	},
 	{
+		// STD and VARIANCE merge summaries of the frame's values as it moves, and
+		// each frame shape moves its ends differently. Values far from zero and
+		// close together, and frames far into a partition of steadily growing
+		// values, answer as precisely as near zero.
+		Name: "window std and variance over each frame shape",
+		SetUpScript: []string{
+			"create table w (id int primary key, g int, x int);",
+			"insert into w values (1,1,3),(2,1,null),(3,1,1),(4,1,4),(5,1,1),(6,2,5),(7,2,9),(8,2,null),(9,2,2),(10,2,6);",
+			"create table d (n int primary key);",
+			"insert into d values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);",
+			"create table big (n int primary key);",
+			"insert into big select a.n*1000 + b.n*100 + c.n*10 + e.n from d a, d b, d c, d e;",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				// Any method short of a pass over each frame can round the last digit
+				// differently, so answers are compared to 12 places.
+				Query: "select id, round(stddev_pop(x) over w, 12), round(var_samp(x) over w, 12) from w window w as (partition by g order by id rows between current row and unbounded following) order by id;",
+				Expected: []sql.Row{
+					{1, 1.299038105677, 2.25},
+					{2, 1.414213562373, 3.0},
+					{3, 1.414213562373, 3.0},
+					{4, 1.5, 4.5},
+					{5, 0.0, nil},
+					{6, 2.5, 8.333333333333},
+					{7, 2.867441755681, 12.333333333333},
+					{8, 2.0, 8.0},
+					{9, 2.0, 8.0},
+					{10, 0.0, nil},
+				},
+			},
+			{
+				// A billion added to each value leaves the variance as it is.
+				Query: "select id, var_pop(x) over w, var_pop(x + 1000000000) over w from w window w as (order by id rows between 1 preceding and 1 following) order by id;",
+				Expected: []sql.Row{
+					{1, 0.0, 0.0},
+					{2, 1.0, 1.0},
+					{3, 2.25, 2.25},
+					{4, 2.0, 2.0},
+					{5, 2.888888888888889, 2.888888888888889},
+					{6, 10.666666666666666, 10.666666666666666},
+					{7, 4.0, 4.0},
+					{8, 12.25, 12.25},
+					{9, 4.0, 4.0},
+					{10, 4.0, 4.0},
+				},
+			},
+			{
+				// Each frame is three values 1000.5 apart, whose deviation is
+				// 1000.5 * sqrt(2/3), however far into the partition the frame is.
+				Query:    "select count(*) from (select n, stddev_pop(n * 1000.5) over (order by n rows between 2 preceding and current row) sd from big) t where n >= 2 and abs(sd - 816.9048292181899) > 1e-9;",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				// Frames after the first row do not hold its large value, so they
+				// answer as they would without it.
+				Query:    "select count(*) from (select n, stddev_pop(case when n = 0 then 1000000000000 else n % 7 end) over w sd, stddev_pop(n % 7) over w want from big window w as (order by n rows between current row and unbounded following)) t where n >= 1 and abs(sd - want) > 1e-9;",
+				Expected: []sql.Row{{0}},
+			},
+			{
+				// One partition of 10,000 rows, whose frames span it.
+				Query: "select count(*), max(sd), max(vs) from (select stddev_pop(n) over () sd, var_samp(n) over (order by n) vs from big) t;",
+				Expected: []sql.Row{
+					{10000, 2886.751331514372, 8.334166666666667e+06},
+				},
+			},
+		},
+	},
+	{
 		Name:    "bit default value",
 		Dialect: "mysql",
 		SetUpScript: []string{

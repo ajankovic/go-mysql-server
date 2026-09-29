@@ -1464,21 +1464,18 @@ func (a *leadLagBase) Compute(ctx *sql.Context, interval sql.WindowInterval, buf
 }
 
 type StdDevPopAgg struct {
-	baseWindowFunction
-	prefixSum      []float64
-	nullCnt        []int
-	partitionStart int
-	partitionEnd   int
+	momentsWindowFunction
 }
 
 func NewStdDevPopAgg(e sql.Expression) *StdDevPopAgg {
 	return &StdDevPopAgg{
-		baseWindowFunction: newBaseWindowFunction(e),
+		momentsWindowFunction: momentsWindowFunction{baseWindowFunction: newBaseWindowFunction(e)},
 	}
 }
 
 func (s *StdDevPopAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.WindowFunction, error) {
 	ns := *s
+	ns.moments = frameMoments{}
 	if w.Frame != nil {
 		framer, err := w.Frame.NewFramer(w)
 		if err != nil {
@@ -1493,83 +1490,155 @@ func (s *StdDevPopAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sq
 	return &ns, nil
 }
 
-func (s *StdDevPopAgg) Dispose(ctx *sql.Context) {
-	expression.Dispose(ctx, s.expr)
+// momentsWindowFunction is what STD and VARIANCE share: the frame's moments,
+// and the partition lifecycle that starts them afresh.
+type momentsWindowFunction struct {
+	baseWindowFunction
+	moments frameMoments
 }
 
-func (s *StdDevPopAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
-	s.Dispose(ctx)
-	s.partitionStart = interval.Start
-	s.partitionEnd = interval.End
-	var err error
-	s.prefixSum, s.nullCnt, err = floatPrefixSum(ctx, interval, buf, s.expr)
-	return err
+func (m *momentsWindowFunction) Dispose(ctx *sql.Context) {
+	expression.Dispose(ctx, m.expr)
 }
 
-func computeStd(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer, expr sql.Expression, m float64) (float64, error) {
-	var v float64
-	for i := interval.Start; i < interval.End; i++ {
-		row := buf[i]
-		val, err := expr.Eval(ctx, row)
+func (m *momentsWindowFunction) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
+	m.Dispose(ctx)
+	m.moments.reset(interval.Start)
+	return nil
+}
+
+// moments summarises a set of values: their count, their mean, and the sum of
+// their squared deviations from the mean. The mean is kept as the offset from
+// ref, one of the values, so that it keeps the precision of the values'
+// differences however large the values are.
+type moments struct {
+	n      int
+	ref    float64
+	offset float64
+	m2     float64
+}
+
+// merge summarises the union of two sets by Chan et al.'s pairwise update, the
+// form for two sets of the Welford update that the grouped STD and VARIANCE
+// use. It subtracts no large sums, and it is associative, so summaries can be
+// merged in any grouping.
+func (a moments) merge(b moments) moments {
+	if a.n == 0 {
+		return b
+	}
+	if b.n == 0 {
+		return a
+	}
+	n := a.n + b.n
+	d := (b.ref - a.ref) + (b.offset - a.offset)
+	return moments{
+		n:      n,
+		ref:    a.ref,
+		offset: a.offset + d*float64(b.n)/float64(n),
+		m2:     a.m2 + b.m2 + d*d*float64(a.n)*float64(b.n)/float64(n),
+	}
+}
+
+// frameMoments summarises a window's frames for STD and VARIANCE in amortised
+// constant time per row, where a pass over each frame would be quadratic in
+// the partition size under an unbounded frame. Framers only move a frame's
+// ends forward within a partition, so the frame is a queue of its non-NULL
+// values, kept as two stacks: a row entering the frame is pushed on back,
+// whose values are also summarised as a whole, and when a row must leave and
+// front is empty, back is moved onto front, each front entry summarising
+// itself and every value after it. The frame's summary is front's top merged
+// with back's. A frame that moves backwards is recomputed from its start.
+type frameMoments struct {
+	start, end int
+	front      []framedMoments
+	back       []framedMoments
+	backAll    moments
+}
+
+type framedMoments struct {
+	idx int
+	moments
+}
+
+func (f *frameMoments) reset(at int) {
+	f.start, f.end = at, at
+	f.front, f.back, f.backAll = f.front[:0], f.back[:0], moments{}
+}
+
+func (f *frameMoments) compute(ctx *sql.Context, expr sql.Expression, interval sql.WindowInterval, buf sql.WindowBuffer) (moments, error) {
+	if interval.Start < f.start || interval.End < f.end {
+		f.reset(interval.Start)
+	}
+	// Rows between the last frame's end and this frame's start are in neither.
+	f.end = max(f.end, interval.Start)
+	for ; f.end < interval.End; f.end++ {
+		v, err := expr.Eval(ctx, buf[f.end])
 		if err != nil {
-			return 0, err
+			return moments{}, err
 		}
-		val, _, err = types.Float64.Convert(ctx, val)
-		if err != nil {
-			val = 0.0
-			ctx.Warn(1292, "Truncated incorrect DOUBLE value: %s", val)
-		}
-		if val == nil {
+		if v == nil {
 			continue
 		}
-		dv := val.(float64) - m
-		v += dv * dv
+		x, _, err := types.Float64.Convert(ctx, v)
+		if err != nil {
+			ctx.Warn(1292, "Truncated incorrect DOUBLE value: %v", v)
+		}
+		if err != nil || x == nil {
+			x = float64(0)
+		}
+		m := moments{n: 1, ref: x.(float64)}
+		f.back = append(f.back, framedMoments{idx: f.end, moments: m})
+		f.backAll = f.backAll.merge(m)
 	}
-	return v, nil
+	f.start = interval.Start
+	for {
+		if len(f.front) == 0 {
+			if len(f.back) == 0 || f.back[0].idx >= f.start {
+				break
+			}
+			var after moments
+			for i := len(f.back) - 1; i >= 0; i-- {
+				after = f.back[i].moments.merge(after)
+				f.front = append(f.front, framedMoments{idx: f.back[i].idx, moments: after})
+			}
+			f.back, f.backAll = f.back[:0], moments{}
+		}
+		top := len(f.front) - 1
+		if f.front[top].idx >= f.start {
+			break
+		}
+		f.front = f.front[:top]
+	}
+	if len(f.front) == 0 {
+		return f.backAll, nil
+	}
+	return f.front[len(f.front)-1].moments.merge(f.backAll), nil
 }
 
 func (s *StdDevPopAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	startIdx := interval.Start - s.partitionStart - 1
-	endIdx := interval.End - s.partitionStart - 1
-
-	var nonNullCnt int
-	if endIdx >= 0 {
-		nonNullCnt += endIdx + 1
-		nonNullCnt -= s.nullCnt[endIdx]
-	}
-	if startIdx >= 0 {
-		nonNullCnt -= startIdx + 1
-		nonNullCnt += s.nullCnt[startIdx]
-	}
-	if nonNullCnt == 0 {
-		return nil, nil
-	}
-
-	m := computePrefixSum(interval, s.partitionStart, s.prefixSum) / float64(nonNullCnt)
-	s2, err := computeStd(ctx, interval, buf, s.expr, m)
+	m, err := s.moments.compute(ctx, s.expr, interval, buf)
 	if err != nil {
 		return nil, err
 	}
-
-	return math.Sqrt(s2 / float64(nonNullCnt)), nil
+	if m.n <= 0 {
+		return nil, nil
+	}
+	return math.Sqrt(m.m2 / float64(m.n)), nil
 }
 
 type StdDevSampAgg struct {
-	baseWindowFunction
-	prefixSum      []float64
-	nullCnt        []int
-	partitionStart int
-	partitionEnd   int
+	momentsWindowFunction
 }
 
 func NewStdDevSampAgg(e sql.Expression) *StdDevSampAgg {
 	return &StdDevSampAgg{
-		baseWindowFunction: newBaseWindowFunction(e),
+		momentsWindowFunction: momentsWindowFunction{baseWindowFunction: newBaseWindowFunction(e)},
 	}
 }
 
 func (s *StdDevSampAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.WindowFunction, error) {
 	ns := *s
+	ns.moments = frameMoments{}
 	if w.Frame != nil {
 		framer, err := w.Frame.NewFramer(w)
 		if err != nil {
@@ -1584,61 +1653,30 @@ func (s *StdDevSampAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (s
 	return &ns, nil
 }
 
-func (s *StdDevSampAgg) Dispose(ctx *sql.Context) {
-	expression.Dispose(ctx, s.expr)
-}
-
-func (s *StdDevSampAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
-	s.Dispose(ctx)
-	s.partitionStart = interval.Start
-	s.partitionEnd = interval.End
-	var err error
-	s.prefixSum, s.nullCnt, err = floatPrefixSum(ctx, interval, buf, s.expr)
-	return err
-}
-
 func (s *StdDevSampAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	startIdx := interval.Start - s.partitionStart - 1
-	endIdx := interval.End - s.partitionStart - 1
-
-	var nonNullCnt int
-	if endIdx >= 0 {
-		nonNullCnt += endIdx + 1
-		nonNullCnt -= s.nullCnt[endIdx]
-	}
-	if startIdx >= 0 {
-		nonNullCnt -= startIdx + 1
-		nonNullCnt += s.nullCnt[startIdx]
-	}
-	if nonNullCnt <= 1 {
-		return nil, nil
-	}
-
-	m := computePrefixSum(interval, s.partitionStart, s.prefixSum) / float64(nonNullCnt)
-	s2, err := computeStd(ctx, interval, buf, s.expr, m)
+	m, err := s.moments.compute(ctx, s.expr, interval, buf)
 	if err != nil {
 		return nil, err
 	}
-
-	return math.Sqrt(s2 / float64(nonNullCnt-1)), nil
+	if m.n <= 1 {
+		return nil, nil
+	}
+	return math.Sqrt(m.m2 / float64(m.n-1)), nil
 }
 
 type VarPopAgg struct {
-	baseWindowFunction
-	prefixSum      []float64
-	nullCnt        []int
-	partitionStart int
-	partitionEnd   int
+	momentsWindowFunction
 }
 
 func NewVarPopAgg(e sql.Expression) *VarPopAgg {
 	return &VarPopAgg{
-		baseWindowFunction: newBaseWindowFunction(e),
+		momentsWindowFunction: momentsWindowFunction{baseWindowFunction: newBaseWindowFunction(e)},
 	}
 }
 
 func (v *VarPopAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.WindowFunction, error) {
 	ns := *v
+	ns.moments = frameMoments{}
 	if w.Frame != nil {
 		framer, err := w.Frame.NewFramer(w)
 		if err != nil {
@@ -1653,61 +1691,30 @@ func (v *VarPopAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.W
 	return &ns, nil
 }
 
-func (v *VarPopAgg) Dispose(ctx *sql.Context) {
-	expression.Dispose(ctx, v.expr)
-}
-
-func (v *VarPopAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
-	v.Dispose(ctx)
-	v.partitionStart = interval.Start
-	v.partitionEnd = interval.End
-	var err error
-	v.prefixSum, v.nullCnt, err = floatPrefixSum(ctx, interval, buf, v.expr)
-	return err
-}
-
 func (v *VarPopAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	startIdx := interval.Start - v.partitionStart - 1
-	endIdx := interval.End - v.partitionStart - 1
-
-	var nonNullCnt int
-	if endIdx >= 0 {
-		nonNullCnt += endIdx + 1
-		nonNullCnt -= v.nullCnt[endIdx]
-	}
-	if startIdx >= 0 {
-		nonNullCnt -= startIdx + 1
-		nonNullCnt += v.nullCnt[startIdx]
-	}
-	if nonNullCnt <= 0 {
-		return nil, nil
-	}
-
-	m := computePrefixSum(interval, v.partitionStart, v.prefixSum) / float64(nonNullCnt)
-	s2, err := computeStd(ctx, interval, buf, v.expr, m)
+	m, err := v.moments.compute(ctx, v.expr, interval, buf)
 	if err != nil {
 		return nil, err
 	}
-
-	return s2 / float64(nonNullCnt), nil
+	if m.n <= 0 {
+		return nil, nil
+	}
+	return m.m2 / float64(m.n), nil
 }
 
 type VarSampAgg struct {
-	baseWindowFunction
-	prefixSum      []float64
-	nullCnt        []int
-	partitionStart int
-	partitionEnd   int
+	momentsWindowFunction
 }
 
 func NewVarSampAgg(e sql.Expression) *VarSampAgg {
 	return &VarSampAgg{
-		baseWindowFunction: newBaseWindowFunction(e),
+		momentsWindowFunction: momentsWindowFunction{baseWindowFunction: newBaseWindowFunction(e)},
 	}
 }
 
 func (v *VarSampAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.WindowFunction, error) {
 	ns := *v
+	ns.moments = frameMoments{}
 	if w.Frame != nil {
 		framer, err := w.Frame.NewFramer(w)
 		if err != nil {
@@ -1722,41 +1729,13 @@ func (v *VarSampAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.
 	return &ns, nil
 }
 
-func (v *VarSampAgg) Dispose(ctx *sql.Context) {
-	expression.Dispose(ctx, v.expr)
-}
-
-func (v *VarSampAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
-	v.Dispose(ctx)
-	v.partitionStart = interval.Start
-	v.partitionEnd = interval.End
-	var err error
-	v.prefixSum, v.nullCnt, err = floatPrefixSum(ctx, interval, buf, v.expr)
-	return err
-}
-
 func (v *VarSampAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	startIdx := interval.Start - v.partitionStart - 1
-	endIdx := interval.End - v.partitionStart - 1
-
-	var nonNullCnt int
-	if endIdx >= 0 {
-		nonNullCnt += endIdx + 1
-		nonNullCnt -= v.nullCnt[endIdx]
-	}
-	if startIdx >= 0 {
-		nonNullCnt -= startIdx + 1
-		nonNullCnt += v.nullCnt[startIdx]
-	}
-	if nonNullCnt <= 1 {
-		return nil, nil
-	}
-
-	m := computePrefixSum(interval, v.partitionStart, v.prefixSum) / float64(nonNullCnt)
-	s2, err := computeStd(ctx, interval, buf, v.expr, m)
+	m, err := v.moments.compute(ctx, v.expr, interval, buf)
 	if err != nil {
 		return nil, err
 	}
-
-	return s2 / float64(nonNullCnt-1), nil
+	if m.n <= 1 {
+		return nil, nil
+	}
+	return m.m2 / float64(m.n-1), nil
 }
