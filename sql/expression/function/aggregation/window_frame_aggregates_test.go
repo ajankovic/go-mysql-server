@@ -17,6 +17,8 @@ package aggregation
 import (
 	"errors"
 	"io"
+	"math"
+	"math/big"
 	"math/rand/v2"
 	"testing"
 
@@ -334,6 +336,8 @@ var windowAggBenchmarks = []struct {
 }{
 	{"max", func(e sql.Expression) sql.WindowFunction { return NewMaxAgg(e) }},
 	{"min", func(e sql.Expression) sql.WindowFunction { return NewMinAgg(e) }},
+	{"stddev_pop", func(e sql.Expression) sql.WindowFunction { return NewStdDevPopAgg(e) }},
+	{"var_samp", func(e sql.Expression) sql.WindowFunction { return NewVarSampAgg(e) }},
 }
 
 // BenchmarkWindowAggregates computes each aggregation over one partition of
@@ -369,5 +373,242 @@ func BenchmarkWindowAggregates(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// stdAggs are STD and VARIANCE, each with its answer from a frame's count of
+// non-NULL values and the sum of their squared deviations from their mean.
+var stdAggs = []struct {
+	name string
+	new  func(sql.Expression) sql.WindowFunction
+	want func(n int, m2 float64) interface{}
+}{
+	{"stddev_pop", func(e sql.Expression) sql.WindowFunction { return NewStdDevPopAgg(e) }, func(n int, m2 float64) interface{} {
+		if n == 0 {
+			return nil
+		}
+		return math.Sqrt(m2 / float64(n))
+	}},
+	{"stddev_samp", func(e sql.Expression) sql.WindowFunction { return NewStdDevSampAgg(e) }, func(n int, m2 float64) interface{} {
+		if n <= 1 {
+			return nil
+		}
+		return math.Sqrt(m2 / float64(n-1))
+	}},
+	{"var_pop", func(e sql.Expression) sql.WindowFunction { return NewVarPopAgg(e) }, func(n int, m2 float64) interface{} {
+		if n == 0 {
+			return nil
+		}
+		return m2 / float64(n)
+	}},
+	{"var_samp", func(e sql.Expression) sql.WindowFunction { return NewVarSampAgg(e) }, func(n int, m2 float64) interface{} {
+		if n <= 1 {
+			return nil
+		}
+		return m2 / float64(n-1)
+	}},
+}
+
+// exactMoments is a frame's count of non-NULL values in column 1 and the sum
+// of their squared deviations from their mean, computed in 256-bit floats.
+func exactMoments(buf sql.WindowBuffer, frame sql.WindowInterval) (int, float64) {
+	sum, squares := new(big.Float).SetPrec(256), new(big.Float).SetPrec(256)
+	n := 0
+	for _, row := range buf[frame.Start:frame.End] {
+		if row[1] == nil {
+			continue
+		}
+		x := new(big.Float).SetPrec(256).SetFloat64(row[1].(float64))
+		sum.Add(sum, x)
+		squares.Add(squares, new(big.Float).SetPrec(256).Mul(x, x))
+		n++
+	}
+	if n == 0 {
+		return 0, 0
+	}
+	sum.Mul(sum, sum)
+	sum.Quo(sum, new(big.Float).SetPrec(256).SetInt64(int64(n)))
+	m2, _ := squares.Sub(squares, sum).Float64()
+	return n, m2
+}
+
+// stdBuffers are frameBuffer's ordering column beside values that defeat a
+// variance taken by subtracting running sums: values that drift steadily and
+// are not whole, so that the sums round and a late frame's deviations are tiny
+// beside them; a large first value followed by small ones; and large values
+// close together.
+func stdBuffers() map[string]sql.WindowBuffer {
+	base := frameBuffer()
+	values := map[string]func(i, row int) interface{}{
+		"random with NULLs": func(i, row int) interface{} {
+			if base[row][1] == nil {
+				return nil
+			}
+			return float64(base[row][1].(int64))
+		},
+		"steady drift":          func(i, row int) interface{} { return float64(i) * 1000.3 },
+		"large first value":     func(i, row int) interface{} { return map[bool]float64{true: 1e12, false: float64(i % 7)}[i == 0] },
+		"large values close by": func(i, row int) interface{} { return 1e9 + float64((i*7919)%101) },
+	}
+	bufs := make(map[string]sql.WindowBuffer, len(values))
+	for name, value := range values {
+		buf := make(sql.WindowBuffer, len(base))
+		for _, p := range framePartitions {
+			for row := p.Start; row < p.End; row++ {
+				buf[row] = sql.Row{base[row][0], value(row-p.Start, row)}
+			}
+		}
+		bufs[name] = buf
+	}
+	return bufs
+}
+
+func TestStdAndVarAggMatchExactMoments(t *testing.T) {
+	for bufName, buf := range stdBuffers() {
+		shapes := map[string][][]sql.WindowInterval{"backwards": backwardFrames(framePartitions)}
+		for _, f := range windowFramers(t, frameOrderBy) {
+			shapes[f.name] = framesOf(t, f.framer, framePartitions, buf)
+		}
+		for _, agg := range stdAggs {
+			for shapeName, frames := range shapes {
+				t.Run(bufName+"/"+agg.name+"/"+shapeName, func(t *testing.T) {
+					ctx := sql.NewEmptyContext()
+					fn := agg.new(expression.NewGetField(1, types.Float64, "x", true))
+					for i, p := range framePartitions {
+						require.NoError(t, fn.StartPartition(ctx, p, buf))
+						for _, frame := range frames[i] {
+							actual, err := fn.Compute(ctx, frame, buf)
+							require.NoError(t, err)
+							want := agg.want(exactMoments(buf, frame))
+							switch {
+							case want == nil:
+								require.Nil(t, actual, "frame %v", frame)
+							case want.(float64) == 0:
+								require.Equal(t, 0.0, actual, "frame %v", frame)
+							default:
+								require.InEpsilon(t, want, actual, 1e-12, "frame %v", frame)
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestStdAndVarAggEvaluateEachFramedRowOnce(t *testing.T) {
+	for _, agg := range stdAggs {
+		t.Run(agg.name, func(t *testing.T) { requireEvaluatesEachFramedRowOnce(t, agg.new) })
+	}
+}
+
+// frameAggs are every aggregation that keeps state from one frame to the next.
+var frameAggs = append([]struct {
+	name string
+	new  func(sql.Expression) sql.WindowFunction
+}{
+	{"max", func(e sql.Expression) sql.WindowFunction { return NewMaxAgg(e) }},
+	{"min", func(e sql.Expression) sql.WindowFunction { return NewMinAgg(e) }},
+}, func() []struct {
+	name string
+	new  func(sql.Expression) sql.WindowFunction
+} {
+	var aggs []struct {
+		name string
+		new  func(sql.Expression) sql.WindowFunction
+	}
+	for _, agg := range stdAggs {
+		aggs = append(aggs, struct {
+			name string
+			new  func(sql.Expression) sql.WindowFunction
+		}{agg.name, agg.new})
+	}
+	return aggs
+}()...)
+
+// failingExpr fails its nth evaluation.
+type failingExpr struct {
+	sql.Expression
+	failAt, evals int
+}
+
+func (e *failingExpr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	e.evals++
+	if e.evals == e.failAt {
+		return nil, errEvalFailed
+	}
+	return e.Expression.Eval(ctx, row)
+}
+
+var errEvalFailed = errors.New("eval failed")
+
+func TestFrameAggsSurfaceEvaluationErrors(t *testing.T) {
+	buf := countedBuffer(10)
+	for _, agg := range frameAggs {
+		t.Run(agg.name, func(t *testing.T) {
+			ctx := sql.NewEmptyContext()
+			fn := agg.new(&failingExpr{Expression: expression.NewGetField(1, types.Int64, "x", true), failAt: 5})
+			require.NoError(t, fn.StartPartition(ctx, sql.WindowInterval{Start: 0, End: 10}, buf))
+			_, err := fn.Compute(ctx, sql.WindowInterval{Start: 0, End: 10}, buf)
+			require.ErrorIs(t, err, errEvalFailed)
+		})
+	}
+}
+
+// A value that does not convert to DOUBLE counts as 0 and warns once, however
+// many frames hold it.
+func TestStdAndVarAggWarnOncePerUnconvertibleValue(t *testing.T) {
+	buf := sql.WindowBuffer{{"a"}, {"b"}, {"3"}, {"4"}}
+	for _, agg := range stdAggs {
+		t.Run(agg.name, func(t *testing.T) {
+			ctx := sql.NewEmptyContext()
+			fn := agg.new(expression.NewGetField(0, types.LongText, "x", true))
+			require.NoError(t, fn.StartPartition(ctx, sql.WindowInterval{Start: 0, End: 4}, buf))
+			for _, frame := range []sql.WindowInterval{{Start: 0, End: 2}, {Start: 0, End: 4}, {Start: 1, End: 4}, {Start: 2, End: 4}} {
+				_, err := fn.Compute(ctx, frame, buf)
+				require.NoError(t, err)
+			}
+			require.Equal(t, uint16(2), ctx.WarningCount())
+			for _, w := range ctx.Warnings() {
+				require.Equal(t, 1292, w.Code)
+			}
+		})
+	}
+}
+
+// WithWindow copies an aggregation, and a copy must not share the frame state
+// of the one it was copied from.
+func TestFrameAggsWithWindowDoNotShareState(t *testing.T) {
+	first := sql.WindowBuffer{{int64(0), int64(5)}, {int64(0), int64(1)}, {int64(1), int64(4)}, {int64(1), int64(2)}, {int64(2), int64(3)}, {int64(2), int64(9)}}
+	second := sql.WindowBuffer{{int64(0), int64(100)}, {int64(0), int64(700)}, {int64(1), int64(300)}, {int64(1), int64(900)}, {int64(2), int64(200)}, {int64(2), int64(800)}}
+	whole := sql.WindowInterval{Start: 0, End: 6}
+	later := sql.WindowInterval{Start: 1, End: 6}
+	for _, agg := range frameAggs {
+		t.Run(agg.name, func(t *testing.T) {
+			ctx := sql.NewEmptyContext()
+			x := expression.NewGetField(1, types.Int64, "x", true)
+			want := agg.new(x)
+			require.NoError(t, want.StartPartition(ctx, whole, first))
+			_, err := want.Compute(ctx, whole, first)
+			require.NoError(t, err)
+			expected, err := want.Compute(ctx, later, first)
+			require.NoError(t, err)
+
+			used := agg.new(x)
+			require.NoError(t, used.StartPartition(ctx, whole, first))
+			_, err = used.Compute(ctx, whole, first)
+			require.NoError(t, err)
+			copied, err := used.(interface {
+				WithWindow(*sql.Context, *sql.WindowDefinition) (sql.WindowFunction, error)
+			}).WithWindow(ctx, &sql.WindowDefinition{})
+			require.NoError(t, err)
+			require.NoError(t, copied.StartPartition(ctx, whole, second))
+			_, err = copied.Compute(ctx, whole, second)
+			require.NoError(t, err)
+
+			actual, err := used.Compute(ctx, later, first)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual)
+		})
 	}
 }
