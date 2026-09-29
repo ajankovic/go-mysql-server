@@ -428,16 +428,19 @@ func (b *BitXorAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf s
 
 type MaxAgg struct {
 	baseWindowFunction
+	extremum frameExtremum
 }
 
 func NewMaxAgg(e sql.Expression) *MaxAgg {
 	return &MaxAgg{
 		baseWindowFunction: newBaseWindowFunction(e),
+		extremum:           frameExtremum{keep: 1},
 	}
 }
 
 func (a *MaxAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.WindowFunction, error) {
 	na := *a
+	na.extremum = frameExtremum{keep: a.extremum.keep}
 	if w.Frame != nil {
 		framer, err := w.Frame.NewFramer(w)
 		if err != nil {
@@ -458,6 +461,7 @@ func (a *MaxAgg) Dispose(ctx *sql.Context) {
 
 func (a *MaxAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buffer sql.WindowBuffer) error {
 	a.Dispose(ctx)
+	a.extremum.reset(interval.Start)
 	return nil
 }
 
@@ -466,45 +470,24 @@ func (a *MaxAgg) NewSlidingFrameInterval(added, dropped sql.WindowInterval) {
 }
 
 func (a *MaxAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buffer sql.WindowBuffer) (interface{}, error) {
-	var max interface{}
-	for i := interval.Start; i < interval.End; i++ {
-		row := buffer[i]
-		v, err := a.expr.Eval(ctx, row)
-		if err != nil {
-			return nil, err
-		}
-
-		if v == nil {
-			continue
-		}
-
-		if max == nil {
-			max = v
-		}
-
-		cmp, err := a.expr.Type(ctx).Compare(ctx, v, max)
-		if err != nil {
-			return nil, err
-		}
-		if cmp == 1 {
-			max = v
-		}
-	}
-	return max, nil
+	return a.extremum.compute(ctx, a.expr, interval, buffer)
 }
 
 type MinAgg struct {
 	baseWindowFunction
+	extremum frameExtremum
 }
 
 func NewMinAgg(e sql.Expression) *MinAgg {
 	return &MinAgg{
 		baseWindowFunction: newBaseWindowFunction(e),
+		extremum:           frameExtremum{keep: -1},
 	}
 }
 
 func (a *MinAgg) WithWindow(ctx *sql.Context, w *sql.WindowDefinition) (sql.WindowFunction, error) {
 	na := *a
+	na.extremum = frameExtremum{keep: a.extremum.keep}
 	if w.Frame != nil {
 		framer, err := w.Frame.NewFramer(w)
 		if err != nil {
@@ -525,6 +508,7 @@ func (a *MinAgg) Dispose(ctx *sql.Context) {
 
 func (a *MinAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buffer sql.WindowBuffer) error {
 	a.Dispose(ctx)
+	a.extremum.reset(interval.Start)
 	return nil
 }
 
@@ -533,31 +517,71 @@ func (a *MinAgg) NewSlidingFrameInterval(added, dropped sql.WindowInterval) {
 }
 
 func (a *MinAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	var min interface{}
-	for _, row := range buf[interval.Start:interval.End] {
-		v, err := a.expr.Eval(ctx, row)
+	return a.extremum.compute(ctx, a.expr, interval, buf)
+}
+
+// frameExtremum computes MAX or MIN over a window's frames in amortised constant
+// time per row, where rescanning each frame would be quadratic in the partition
+// size under an unbounded frame. Framers only move a frame's ends forward within
+// a partition, so it keeps the frame's candidates in position order, each
+// strictly better than every later one: a row entering the frame evicts the
+// candidates it beats, a row leaving it drops off the front, and the front is
+// the answer. Among equal values the earliest wins, as a scan would pick it. A
+// frame that moves backwards is recomputed from its start.
+type frameExtremum struct {
+	// keep is the comparison result by which a new value evicts an earlier
+	// candidate: 1 for MAX, -1 for MIN.
+	keep       int
+	start, end int
+	candidates []frameCandidate
+}
+
+type frameCandidate struct {
+	idx int
+	val interface{}
+}
+
+func (f *frameExtremum) reset(at int) {
+	f.start, f.end = at, at
+	f.candidates = f.candidates[:0]
+}
+
+func (f *frameExtremum) compute(ctx *sql.Context, expr sql.Expression, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
+	if interval.Start < f.start || interval.End < f.end {
+		f.reset(interval.Start)
+	}
+	// Rows between the last frame's end and this frame's start are in neither.
+	f.end = max(f.end, interval.Start)
+	typ := expr.Type(ctx)
+	for ; f.end < interval.End; f.end++ {
+		v, err := expr.Eval(ctx, buf[f.end])
 		if err != nil {
 			return nil, err
 		}
-
 		if v == nil {
 			continue
 		}
-
-		if min == nil {
-			min = v
-			continue
+		for len(f.candidates) > 0 {
+			cmp, err := typ.Compare(ctx, v, f.candidates[len(f.candidates)-1].val)
+			if err != nil {
+				return nil, err
+			}
+			if cmp != f.keep {
+				break
+			}
+			f.candidates = f.candidates[:len(f.candidates)-1]
 		}
-
-		cmp, err := a.expr.Type(ctx).Compare(ctx, v, min)
-		if err != nil {
-			return nil, err
-		}
-		if cmp == -1 {
-			min = v
-		}
+		f.candidates = append(f.candidates, frameCandidate{idx: f.end, val: v})
 	}
-	return min, nil
+	f.start = interval.Start
+	for len(f.candidates) > 0 && f.candidates[0].idx < f.start {
+		f.candidates[0] = frameCandidate{}
+		f.candidates = f.candidates[1:]
+	}
+	if len(f.candidates) == 0 {
+		return nil, nil
+	}
+	return f.candidates[0].val, nil
 }
 
 type LastAgg struct {
