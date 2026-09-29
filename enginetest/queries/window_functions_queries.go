@@ -2472,6 +2472,53 @@ WHERE total <> fourcount + twosum;`,
 			},
 		},
 	},
+	{
+		// STD and VARIANCE merge summaries of the frame's values as it moves, and
+		// each frame shape moves its ends differently. Values far from zero and
+		// close together answer as precisely as near zero.
+		Name:    "window std and variance over each frame shape",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table w (id int primary key, g int, x int);",
+			"insert into w values (1,1,3),(2,1,null),(3,1,1),(4,1,4),(5,1,1),(6,2,5),(7,2,9),(8,2,null),(9,2,2),(10,2,6);",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				// Any method short of a pass over each frame can round the last digit
+				// differently, so answers are compared to 12 places.
+				Query: "select id, round(stddev_pop(x) over w, 12), round(var_samp(x) over w, 12) from w window w as (partition by g order by id rows between current row and unbounded following) order by id;",
+				Expected: []sql.Row{
+					{1, 1.299038105677, 2.25},
+					{2, 1.414213562373, 3.0},
+					{3, 1.414213562373, 3.0},
+					{4, 1.5, 4.5},
+					{5, 0.0, nil},
+					{6, 2.5, 8.333333333333},
+					{7, 2.867441755681, 12.333333333333},
+					{8, 2.0, 8.0},
+					{9, 2.0, 8.0},
+					{10, 0.0, nil},
+				},
+			},
+			{
+				// A billion added to each value leaves the variance as it is. MySQL
+				// answers 2.8888888557751975 for id 5, as its grouped VAR_POP does.
+				Query: "select id, var_pop(x) over w, var_pop(x + 1000000000) over w from w window w as (order by id rows between 1 preceding and 1 following) order by id;",
+				Expected: []sql.Row{
+					{1, 0.0, 0.0},
+					{2, 1.0, 1.0},
+					{3, 2.25, 2.25},
+					{4, 2.0, 2.0},
+					{5, 2.888888888888889, 2.888888888888889},
+					{6, 10.666666666666666, 10.666666666666666},
+					{7, 4.0, 4.0},
+					{8, 12.25, 12.25},
+					{9, 4.0, 4.0},
+					{10, 4.0, 4.0},
+				},
+			},
+		},
+	},
 }
 
 // WindowRowFramesScriptTests tests window functions using ROWS frame specifications.
