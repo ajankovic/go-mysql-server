@@ -15,6 +15,8 @@
 package queries
 
 import (
+	"time"
+
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/expression"
 	"github.com/dolthub/go-mysql-server/sql/expression/function/aggregation"
@@ -2356,6 +2358,116 @@ WHERE total <> fourcount + twosum;`,
 					"FROM (SELECT 1 AS z) q;",
 				Expected: []sql.Row{
 					{true, false, true, false},
+				},
+			},
+		},
+	},
+	{
+		// MIN and MAX keep state from one frame to the next, and each frame
+		// shape moves its ends differently. Values in s include pairs equal
+		// under the collation, so the rows also pin which of two equal values
+		// is returned.
+		Name:    "window min and max over each frame shape",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table w (id int primary key, g int, x int, s varchar(10) collate utf8mb4_0900_ai_ci);",
+			"insert into w values (1,1,3,'b'),(2,1,null,null),(3,1,1,'a'),(4,1,4,'A'),(5,1,1,'c'),(6,2,5,'C'),(7,2,9,'b'),(8,2,null,null),(9,2,2,'B'),(10,2,6,'a');",
+			"create table t (id int primary key, dc decimal(6,2), dt datetime);",
+			"insert into t values (1,3.50,'2024-03-01 10:00:00'),(2,null,null),(3,12.25,'2023-12-31 23:59:59'),(4,3.5,'2024-05-05 00:00:00'),(5,7.10,'2022-01-01 00:00:00');",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "select id, max(x) over w, min(x) over w, min(s) over w, max(s) over w from w window w as (partition by g) order by id;",
+				Expected: []sql.Row{
+					{1, 4, 1, "a", "c"},
+					{2, 4, 1, "a", "c"},
+					{3, 4, 1, "a", "c"},
+					{4, 4, 1, "a", "c"},
+					{5, 4, 1, "a", "c"},
+					{6, 9, 2, "a", "C"},
+					{7, 9, 2, "a", "C"},
+					{8, 9, 2, "a", "C"},
+					{9, 9, 2, "a", "C"},
+					{10, 9, 2, "a", "C"},
+				},
+			},
+			{
+				Query: "select id, max(x) over w, min(x) over w, min(s) over w, max(s) over w from w window w as (partition by g order by id) order by id;",
+				Expected: []sql.Row{
+					{1, 3, 3, "b", "b"},
+					{2, 3, 3, "b", "b"},
+					{3, 3, 1, "a", "b"},
+					{4, 4, 1, "a", "b"},
+					{5, 4, 1, "a", "c"},
+					{6, 5, 5, "C", "C"},
+					{7, 9, 5, "b", "C"},
+					{8, 9, 5, "b", "C"},
+					{9, 9, 2, "b", "C"},
+					{10, 9, 2, "a", "C"},
+				},
+			},
+			{
+				Query: "select id, max(x) over w, min(x) over w from w window w as (partition by g order by id rows between current row and unbounded following) order by id;",
+				Expected: []sql.Row{
+					{1, 4, 1},
+					{2, 4, 1},
+					{3, 4, 1},
+					{4, 4, 1},
+					{5, 1, 1},
+					{6, 9, 2},
+					{7, 9, 2},
+					{8, 6, 2},
+					{9, 6, 2},
+					{10, 6, 6},
+				},
+			},
+			{
+				Query: "select id, max(x) over w, min(x) over w from w window w as (order by id rows between 2 preceding and 1 following) order by id;",
+				Expected: []sql.Row{
+					{1, 3, 3},
+					{2, 3, 1},
+					{3, 4, 1},
+					{4, 4, 1},
+					{5, 5, 1},
+					{6, 9, 1},
+					{7, 9, 1},
+					{8, 9, 2},
+					{9, 9, 2},
+					{10, 6, 2},
+				},
+			},
+			{
+				Query: "select id, max(x) over w, min(x) over w from w window w as (order by id range between 1 preceding and 1 following) order by id;",
+				Expected: []sql.Row{
+					{1, 3, 3},
+					{2, 3, 1},
+					{3, 4, 1},
+					{4, 4, 1},
+					{5, 5, 1},
+					{6, 9, 1},
+					{7, 9, 5},
+					{8, 9, 2},
+					{9, 6, 2},
+					{10, 6, 2},
+				},
+			},
+			{
+				Query: "select id, max(dc) over w, min(dt) over w from t window w as (order by id rows between 1 preceding and current row) order by id;",
+				Expected: []sql.Row{
+					{1, "3.50", time.Date(2024, 3, 1, 10, 0, 0, 0, time.UTC)},
+					{2, "3.50", time.Date(2024, 3, 1, 10, 0, 0, 0, time.UTC)},
+					{3, "12.25", time.Date(2023, 12, 31, 23, 59, 59, 0, time.UTC)},
+					{4, "12.25", time.Date(2023, 12, 31, 23, 59, 59, 0, time.UTC)},
+					{5, "7.10", time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)},
+				},
+			},
+			{
+				// A window run again for each outer row starts from empty state: each
+				// answer is the running maximum of the rows up to the outer row.
+				Query: "select o.id, (select max(i.x) over (order by i.id) from w i where i.g = o.g and i.id <= o.id order by i.id desc limit 1) from w o order by o.id;",
+				Expected: []sql.Row{
+					{1, 3}, {2, 3}, {3, 3}, {4, 4}, {5, 4},
+					{6, 5}, {7, 9}, {8, 9}, {9, 9}, {10, 9},
 				},
 			},
 		},
