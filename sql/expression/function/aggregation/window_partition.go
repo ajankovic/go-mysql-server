@@ -233,6 +233,12 @@ func (i *WindowPartitionIter) materializeOutput(ctx *sql.Context) (sql.WindowBuf
 	var row sql.Row
 	var err error
 	for {
+		// Every output row is computed here before the first is returned, and a
+		// frame that rescans itself (MIN, MAX over a whole partition) makes this
+		// loop quadratic, so a cancelled query stops at the next row.
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
 		row, err = i.compute(ctx)
 		if errors.Is(err, io.EOF) {
 			break
