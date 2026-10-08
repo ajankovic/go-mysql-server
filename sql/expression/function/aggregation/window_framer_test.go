@@ -179,10 +179,14 @@ func TestWindowRowFramers(t *testing.T) {
 }
 
 func TestWindowRangeFramers(t *testing.T) {
+	expr := expression.NewGetField(1, types.Int64, "", false)
+	// A case orders [buffer] by [expr] ascending unless it sets OrderBy or
+	// Order; a descending case reads [descBuffer].
 	tests := []struct {
 		Name     string
 		Framer   func(sql.WindowFrame, *sql.WindowDefinition) (sql.WindowFramer, error)
 		OrderBy  []sql.Expression
+		Order    sql.SortOrder
 		Expected []sql.WindowInterval
 	}{
 		{
@@ -255,12 +259,87 @@ func TestWindowRangeFramers(t *testing.T) {
 				{Start: 16, End: 18}, {Start: 16, End: 19}, {Start: 16, End: 19},
 			},
 		},
+		{
+			Name:   "descending range 2 preceding to 1 preceding framer",
+			Framer: NewRangeNPrecedingToNPrecedingFramer,
+			Order:  sql.Descending,
+			Expected: []sql.WindowInterval{
+				{},
+				{Start: 0, End: 0}, {Start: 0, End: 1}, {Start: 0, End: 1}, {Start: 0, End: 3}, {Start: 1, End: 4}, {Start: 1, End: 4}, {Start: 4, End: 6}, {Start: 6, End: 7}, {Start: 7, End: 8}, {Start: 7, End: 8},
+				{Start: 10, End: 10}, {Start: 10, End: 10}, {Start: 10, End: 12}, {Start: 12, End: 13}, {Start: 13, End: 14}, {Start: 13, End: 14},
+				{Start: 16, End: 16}, {Start: 16, End: 17}, {Start: 16, End: 18},
+			},
+		},
+		{
+			Name:   "descending range current row to current row framer",
+			Framer: NewRangeCurrentRowToCurrentRowFramer,
+			Order:  sql.Descending,
+			Expected: []sql.WindowInterval{
+				{},
+				{Start: 0, End: 1}, {Start: 1, End: 3}, {Start: 1, End: 3}, {Start: 3, End: 4}, {Start: 4, End: 6}, {Start: 4, End: 6}, {Start: 6, End: 7}, {Start: 7, End: 8}, {Start: 8, End: 10}, {Start: 8, End: 10},
+				{Start: 10, End: 12}, {Start: 10, End: 12}, {Start: 12, End: 13}, {Start: 13, End: 14}, {Start: 14, End: 16}, {Start: 14, End: 16},
+				{Start: 16, End: 17}, {Start: 17, End: 18}, {Start: 18, End: 19},
+			},
+		},
+		{
+			Name:   "descending range 1 following to 1 following framer",
+			Framer: NewRangeNFollowingToNFollowingFramer,
+			Order:  sql.Descending,
+			Expected: []sql.WindowInterval{
+				{},
+				{Start: 1, End: 3}, {Start: 3, End: 4}, {Start: 3, End: 4}, {Start: 4, End: 6}, {Start: 6, End: 6}, {Start: 6, End: 6}, {Start: 7, End: 7}, {Start: 8, End: 10}, {Start: 10, End: 10}, {Start: 10, End: 10},
+				{Start: 12, End: 12}, {Start: 12, End: 12}, {Start: 13, End: 13}, {Start: 14, End: 16}, {Start: 16, End: 16}, {Start: 16, End: 16},
+				{Start: 17, End: 18}, {Start: 18, End: 19}, {Start: 19, End: 19},
+			},
+		},
+		{
+			Name:   "descending range unbounded preceding to 1 following framer",
+			Framer: NewRangeUnboundedPrecedingToNFollowingFramer,
+			Order:  sql.Descending,
+			Expected: []sql.WindowInterval{
+				{},
+				{Start: 0, End: 3}, {Start: 0, End: 4}, {Start: 0, End: 4}, {Start: 0, End: 6}, {Start: 0, End: 6}, {Start: 0, End: 6}, {Start: 0, End: 7}, {Start: 0, End: 10}, {Start: 0, End: 10}, {Start: 0, End: 10},
+				{Start: 10, End: 12}, {Start: 10, End: 12}, {Start: 10, End: 13}, {Start: 10, End: 16}, {Start: 10, End: 16}, {Start: 10, End: 16},
+				{Start: 16, End: 18}, {Start: 16, End: 19}, {Start: 16, End: 19},
+			},
+		},
+		{
+			Name:   "descending range 2 preceding to 1 following framer",
+			Framer: NewRangeNPrecedingToNFollowingFramer,
+			Order:  sql.Descending,
+			Expected: []sql.WindowInterval{
+				{},
+				{Start: 0, End: 3}, {Start: 0, End: 4}, {Start: 0, End: 4}, {Start: 0, End: 6}, {Start: 1, End: 6}, {Start: 1, End: 6}, {Start: 4, End: 7}, {Start: 6, End: 10}, {Start: 7, End: 10}, {Start: 7, End: 10},
+				{Start: 10, End: 12}, {Start: 10, End: 12}, {Start: 10, End: 13}, {Start: 12, End: 16}, {Start: 13, End: 16}, {Start: 13, End: 16},
+				{Start: 16, End: 18}, {Start: 16, End: 19}, {Start: 16, End: 19},
+			},
+		},
+		{
+			// the second key splits the first key's peers 1 and 8 in the
+			// first partition and 6 in the second
+			Name:    "two key range current row to current row framer",
+			Framer:  NewRangeCurrentRowToCurrentRowFramer,
+			OrderBy: []sql.Expression{expr, expression.NewGetField(2, types.Int64, "", false)},
+			Expected: []sql.WindowInterval{
+				{},
+				{Start: 0, End: 1}, {Start: 1, End: 2}, {Start: 2, End: 3}, {Start: 3, End: 4}, {Start: 4, End: 6}, {Start: 4, End: 6}, {Start: 6, End: 7}, {Start: 7, End: 8}, {Start: 8, End: 9}, {Start: 9, End: 10},
+				{Start: 10, End: 12}, {Start: 10, End: 12}, {Start: 12, End: 13}, {Start: 13, End: 14}, {Start: 14, End: 15}, {Start: 15, End: 16},
+				{Start: 16, End: 17}, {Start: 17, End: 18}, {Start: 18, End: 19},
+			},
+		},
 	}
 
+	// rows are (partition, first key, second key), sorted on both keys
 	buffer := []sql.Row{
-		{0, 1}, {0, 1}, {0, 2}, {0, 4}, {0, 6}, {0, 6}, {0, 7}, {0, 8}, {0, 8}, {0, 9},
-		{1, 1}, {1, 1}, {1, 2}, {1, 4}, {1, 6}, {1, 6},
-		{2, 1}, {2, 2}, {2, 3},
+		{0, 1, 1}, {0, 1, 2}, {0, 2, 1}, {0, 4, 1}, {0, 6, 1}, {0, 6, 1}, {0, 7, 1}, {0, 8, 1}, {0, 8, 2}, {0, 9, 1},
+		{1, 1, 1}, {1, 1, 1}, {1, 2, 1}, {1, 4, 1}, {1, 6, 1}, {1, 6, 2},
+		{2, 1, 1}, {2, 2, 1}, {2, 3, 1},
+	}
+	// the same partitions over the first key, sorted largest first
+	descBuffer := []sql.Row{
+		{0, 9}, {0, 8}, {0, 8}, {0, 7}, {0, 6}, {0, 6}, {0, 4}, {0, 2}, {0, 1}, {0, 1},
+		{1, 6}, {1, 6}, {1, 4}, {1, 2}, {1, 1}, {1, 1},
+		{2, 3}, {2, 2}, {2, 1},
 	}
 	partitions := []sql.WindowInterval{
 		{}, // nil rows creates one empty partition
@@ -268,13 +347,25 @@ func TestWindowRangeFramers(t *testing.T) {
 		{Start: 10, End: 16},
 		{Start: 16, End: 19},
 	}
-	expr := expression.NewGetField(1, types.Int64, "", false)
 
 	for _, tt := range tests {
 		t.Run(tt.Name, func(t *testing.T) {
 			ctx := sql.NewEmptyContext()
 			frameDef := dummyFrame{}
-			w := &sql.WindowDefinition{OrderBy: sql.SortConditions{{Expr: expr, Order: sql.Ascending}}}
+			order, buffer := tt.Order, buffer
+			if order == sql.Descending {
+				buffer = descBuffer
+			} else {
+				order = sql.Ascending
+			}
+			orderBy := tt.OrderBy
+			if orderBy == nil {
+				orderBy = []sql.Expression{expr}
+			}
+			w := &sql.WindowDefinition{}
+			for _, e := range orderBy {
+				w.OrderBy = append(w.OrderBy, sql.SortCondition{Expr: e, Order: order})
+			}
 			framer, err := tt.Framer(frameDef, w)
 			require.NoError(t, err)
 
