@@ -334,6 +334,12 @@ type rangeFramerBase struct {
 	endInclusion sql.Expression
 	// reference expression for boundary calculation
 	orderBy sql.Expression
+	// every ORDER BY key: a CURRENT ROW bound takes the rows equal to the
+	// current row on all of them, its peers
+	peers []sql.Expression
+	// descending is the first key's order: PRECEDING rows hold larger values
+	// than the current row's, and the buffer is sorted largest first
+	descending bool
 
 	idx                int
 	partitionStart     int
@@ -349,14 +355,19 @@ type rangeFramerBase struct {
 }
 
 func (f *rangeFramerBase) NewFramer(interval sql.WindowInterval) (sql.WindowFramer, error) {
+	// N PRECEDING lies before the current row in the sort order: below its
+	// value in ascending order, above it in descending order.
+	preceding, following := ast.MinusStr, ast.PlusStr
+	if f.descending {
+		preceding, following = following, preceding
+	}
+
 	var startInclusion sql.Expression
 	switch {
-	case f.startCurrentRow:
-		startInclusion = f.orderBy
 	case f.startNPreceding != nil:
-		startInclusion = expression.NewArithmetic(f.orderBy, f.startNPreceding, ast.MinusStr)
+		startInclusion = expression.NewArithmetic(f.orderBy, f.startNPreceding, preceding)
 	case f.startNFollowing != nil:
-		startInclusion = expression.NewArithmetic(f.orderBy, f.startNFollowing, ast.PlusStr)
+		startInclusion = expression.NewArithmetic(f.orderBy, f.startNFollowing, following)
 	}
 
 	// TODO: how to validate datetime, interval pair when they aren't type comparable
@@ -366,12 +377,10 @@ func (f *rangeFramerBase) NewFramer(interval sql.WindowInterval) (sql.WindowFram
 
 	var endInclusion sql.Expression
 	switch {
-	case f.endCurrentRow:
-		endInclusion = f.orderBy
 	case f.endNPreceding != nil:
-		endInclusion = expression.NewArithmetic(f.orderBy, f.endNPreceding, ast.MinusStr)
+		endInclusion = expression.NewArithmetic(f.orderBy, f.endNPreceding, preceding)
 	case f.endNFollowing != nil:
-		endInclusion = expression.NewArithmetic(f.orderBy, f.endNFollowing, ast.PlusStr)
+		endInclusion = expression.NewArithmetic(f.orderBy, f.endNFollowing, following)
 	}
 
 	// TODO: how to validate datetime, interval pair when they aren't type comparable
@@ -397,6 +406,8 @@ func (f *rangeFramerBase) NewFramer(interval sql.WindowInterval) (sql.WindowFram
 		endNFollowing:      f.endNFollowing,
 		// range specific
 		orderBy:        f.orderBy,
+		peers:          f.peers,
+		descending:     f.descending,
 		nullOrdering:   f.nullOrdering,
 		startInclusion: startInclusion,
 		endInclusion:   endInclusion,
@@ -417,8 +428,13 @@ func (f *rangeFramerBase) Next(ctx *sql.Context, buf sql.WindowBuffer) (sql.Wind
 		// default frame includes all rows, since all rows in the current partition are peers when no order has been
 		// specified.
 		newStart = f.partitionStart
+	case f.startCurrentRow:
+		newStart, err = peerGroupStart(ctx, f.idx, newStart, f.peers, buf)
+		if err != nil {
+			return sql.WindowInterval{}, err
+		}
 	default:
-		newStart, err = findInclusionBoundary(ctx, f.idx, newStart, f.partitionEnd, f.startInclusion, f.orderBy, buf, greaterThanOrEqual, f.nullOrdering)
+		newStart, err = findInclusionBoundary(ctx, f.idx, newStart, f.partitionEnd, f.startInclusion, f.orderBy, buf, greaterThanOrEqual, f.nullOrdering, f.descending)
 		if err != nil {
 			return sql.WindowInterval{}, err
 		}
@@ -431,8 +447,13 @@ func (f *rangeFramerBase) Next(ctx *sql.Context, buf sql.WindowBuffer) (sql.Wind
 	switch {
 	case newEnd > f.partitionEnd, f.unboundedFollowing, f.endCurrentRow && f.orderBy == nil:
 		newEnd = f.partitionEnd
+	case f.endCurrentRow:
+		newEnd, err = peerGroupEnd(ctx, f.idx, newEnd, f.partitionEnd, f.peers, buf)
+		if err != nil {
+			return sql.WindowInterval{}, err
+		}
 	default:
-		newEnd, err = findInclusionBoundary(ctx, f.idx, newEnd, f.partitionEnd, f.endInclusion, f.orderBy, buf, greaterThan, f.nullOrdering)
+		newEnd, err = findInclusionBoundary(ctx, f.idx, newEnd, f.partitionEnd, f.endInclusion, f.orderBy, buf, greaterThan, f.nullOrdering, f.descending)
 		if err != nil {
 			return sql.WindowInterval{}, err
 		}
@@ -453,10 +474,12 @@ const (
 )
 
 // findInclusionBoundary searches a sorted [buffer] for the last index satisfying
-// the comparison: [inclusion] [stopCond] [expr]. For example, (x+2) > (x).
-// [expr] is evaluated at the current row, [inclusion] is evaluated on the boundary
-// candidate. This is used as a sliding window algorithm for value ranges.
-func findInclusionBoundary(ctx *sql.Context, pos, searchStart, partitionEnd int, inclusion, expr sql.Expression, buf sql.WindowBuffer, stopCond stopCond, nullOrdering sql.NullOrdering) (int, error) {
+// the comparison: [expr] [stopCond] [inclusion], in the buffer's sort order.
+// For example, (x) > (x+2). [inclusion] is evaluated at the current row, [expr]
+// on the boundary candidate. In a [descending] buffer a candidate comes after
+// the bound when its value is smaller. This is used as a sliding window
+// algorithm for value ranges.
+func findInclusionBoundary(ctx *sql.Context, pos, searchStart, partitionEnd int, inclusion, expr sql.Expression, buf sql.WindowBuffer, stopCond stopCond, nullOrdering sql.NullOrdering, descending bool) (int, error) {
 	cur, err := inclusion.Eval(ctx, buf[pos])
 	if err != nil {
 		return 0, err
@@ -494,10 +517,47 @@ func findInclusionBoundary(ctx *sql.Context, pos, searchStart, partitionEnd int,
 			if err != nil {
 				return 0, err
 			}
+			if descending {
+				cmp = -cmp
+			}
 		}
 	}
 
 	return i - 1, nil
+}
+
+// peerGroupStart returns the first row of the current row [pos]'s peer group,
+// the rows equal to it on every ORDER BY key, searching forward from
+// [searchStart], which is never past it: a frame's start only moves forward.
+func peerGroupStart(ctx *sql.Context, pos, searchStart int, peers []sql.Expression, buf sql.WindowBuffer) (int, error) {
+	i := searchStart
+	for ; i < pos; i++ {
+		newGroup, err := isNewOrderByValue(ctx, peers, buf[i], buf[pos])
+		if err != nil {
+			return 0, err
+		}
+		if !newGroup {
+			break
+		}
+	}
+	return i, nil
+}
+
+// peerGroupEnd returns the index after the last row of the current row [pos]'s
+// peer group, searching forward from [searchStart], or from the row after
+// [pos] when that is further. An empty partition has no rows to search.
+func peerGroupEnd(ctx *sql.Context, pos, searchStart, partitionEnd int, peers []sql.Expression, buf sql.WindowBuffer) (int, error) {
+	i := min(max(searchStart, pos+1), partitionEnd)
+	for ; i < partitionEnd; i++ {
+		newGroup, err := isNewOrderByValue(ctx, peers, buf[pos], buf[i])
+		if err != nil {
+			return 0, err
+		}
+		if newGroup {
+			break
+		}
+	}
+	return i, nil
 }
 
 func (f *rangeFramerBase) FirstIdx() int {
