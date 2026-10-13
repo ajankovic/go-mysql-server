@@ -657,6 +657,32 @@ var TemporalScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		// COALESCE over times, or over NULL and a time, is a time, as MySQL
+		// types it, so it compares with text as a time rather than as a
+		// string.
+		Name:    "coalesce over times is a time",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (id int primary key, s datetime(6), e timestamp, d date, tm time);",
+			"insert into t values (1, '2026-03-15 06:00:00', '2026-08-20 18:00:00', '2026-08-20', '10:11:12');",
+			"create table c as select coalesce(null, s) a, coalesce(e, s) b, coalesce(null, e) c, coalesce(null, tm) d, coalesce(tm, d) e from t;",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select coalesce(e, s) > '2026-7-1', coalesce(null, s) < '2026-3-2' from t;",
+				Expected: []sql.Row{{true, false}},
+			},
+			{
+				Query:    "select coalesce(null, s), coalesce(e, s) from t;",
+				Expected: []sql.Row{{time.Date(2026, 3, 15, 6, 0, 0, 0, time.UTC), time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC)}},
+			},
+			{
+				Query:    "select column_name, data_type from information_schema.columns where table_name = 'c' order by 1;",
+				Expected: []sql.Row{{"a", "datetime"}, {"b", "datetime"}, {"c", "timestamp"}, {"d", "time"}, {"e", "datetime"}},
+			},
+		},
+	},
 
 	// Time Tests
 	{
