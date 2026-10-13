@@ -252,3 +252,35 @@ func TestFromUnixtime(t *testing.T) {
 	_, err = NewUnixTimestamp(ctx, expression.NewLiteral(1447430881, types.Int64))
 	require.NoError(err)
 }
+
+func TestCurrDate(t *testing.T) {
+	// 23:30 UTC is already the next day at +02:00.
+	now := time.Date(2026, 7, 5, 23, 30, 15, 123456789, time.UTC)
+	tests := []struct {
+		timeZone string
+		expected time.Time
+	}{
+		{"SYSTEM", time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC)},
+		{"+02:00", time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, test := range tests {
+		for _, name := range []string{"curdate", "current_date"} {
+			t.Run(name+" "+test.timeZone, func(t *testing.T) {
+				err := sql.RunWithNowFunc(func() time.Time { return now }, func() error {
+					ctx := sql.NewEmptyContext()
+					require.NoError(t, ctx.SetSessionVariable(ctx, "time_zone", test.timeZone))
+					curdate := NewCurrDate(ctx)
+					if name == "current_date" {
+						curdate = NewCurrentDate(ctx)
+					}
+					require.Equal(t, types.Date, curdate.Type(ctx))
+					actual, err := curdate.Eval(ctx, nil)
+					require.NoError(t, err)
+					require.Equal(t, test.expected, actual)
+					return nil
+				})
+				require.NoError(t, err)
+			})
+		}
+	}
+}

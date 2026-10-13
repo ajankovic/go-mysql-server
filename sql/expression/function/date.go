@@ -456,19 +456,24 @@ func (c CurrDate) Description() string {
 
 func NewCurrDate(ctx *sql.Context) sql.Expression {
 	return CurrDate{
-		NoArgFunc: NoArgFunc{Name: "curdate", SQLType: types.LongText},
+		NoArgFunc: NoArgFunc{Name: "curdate", SQLType: types.Date},
 	}
 }
 
 func NewCurrentDate(ctx *sql.Context) sql.Expression {
 	return CurrDate{
-		NoArgFunc: NoArgFunc{Name: "current_date", SQLType: types.LongText},
+		NoArgFunc: NoArgFunc{Name: "current_date", SQLType: types.Date},
 	}
 }
 
-func currDateLogic(ctx *sql.Context, _ sql.Row) (interface{}, error) {
-	t := ctx.QueryTime()
-	return fmt.Sprintf("%d-%02d-%02d", t.Year(), t.Month(), t.Day()), nil
+// currDateLogic returns the date part of NOW(), so CURDATE() follows the session time zone as NOW() does.
+func currDateLogic(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	now, err := (&Now{}).Eval(ctx, row)
+	if err != nil {
+		return nil, err
+	}
+	t := now.(time.Time)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), nil
 }
 
 // Eval implements sql.Expression
