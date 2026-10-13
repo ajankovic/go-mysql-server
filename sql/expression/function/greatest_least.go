@@ -97,9 +97,12 @@ func compEval(
 		cmp = greaterThan
 	}
 
+	if types.IsTime(returnType) {
+		return compTemporalEval(ctx, returnType, args, row, cmp)
+	}
+
 	var selectedNum float64
 	var selectedString string
-	var selectedTime time.Time
 
 	for i, arg := range args {
 		val, err := arg.Eval(ctx, row)
@@ -170,10 +173,9 @@ func compEval(
 				selectedNum = fval
 			}
 		case time.Time:
-			// Since we deviate from MySQL with int -> time handling, we only set the selectedTime variable
-			if i == 0 || cmp(t, selectedTime) {
-				selectedTime = t
-			}
+			// A time compared as a number or a string is skipped: we deviate from
+			// MySQL, which compares a time mixed with numbers as a time.
+			continue
 		case *apd.Decimal:
 			fval, _ := t.Float64()
 			if i == 0 || cmp(fval, selectedNum) {
@@ -187,10 +189,6 @@ func compEval(
 
 	}
 
-	if types.IsDatetimeType(returnType) {
-		return selectedTime, nil
-	}
-
 	switch returnType {
 	case types.Int64:
 		return int64(selectedNum), nil
@@ -202,6 +200,49 @@ func compEval(
 	return float64(selectedNum), nil
 }
 
+// compTemporalEval implements Greatest/Least Eval() when the arguments compare as
+// times. Each value is converted to returnType, the conversion CAST applies, so a
+// string or a text-typed time such as CURDATE() compares as the time it names. A
+// value that does not convert fails the comparison: MySQL warns and skips it, but
+// skipping it would answer with the remaining arguments as if it had lost.
+func compTemporalEval(
+	ctx *sql.Context,
+	returnType sql.Type,
+	args []sql.Expression,
+	row sql.Row,
+	cmp func(a, b interface{}) bool,
+) (interface{}, error) {
+	var selected time.Time
+	selectedAny := false
+	for _, arg := range args {
+		val, err := arg.Eval(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+
+		if val == nil {
+			return nil, nil
+		}
+
+		converted, _, err := returnType.Convert(ctx, val)
+		if err != nil {
+			return nil, err
+		}
+
+		t, ok := converted.(time.Time)
+		if !ok {
+			return nil, ErrUnsupportedType.New(converted)
+		}
+
+		if !selectedAny || cmp(t, selected) {
+			selected = t
+			selectedAny = true
+		}
+	}
+
+	return selected, nil
+}
+
 // compRetType is used to determine the type from args based on the rules described for
 // Greatest/Least
 func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
@@ -211,7 +252,8 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 
 	allString := true
 	allInt := true
-	allDatetime := true
+	allDate := true
+	anyTime := false
 	anyDecimal := false
 	anyFloat := false
 	var argTypes []sql.Type
@@ -226,11 +268,17 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 			argType = svt.UnderlyingType()
 		}
 
+		// TIMESTAMP('2024-01-01') declares its argument's type, text, but
+		// evaluates to a DATETIME, so it compares as the time it is.
+		if _, ok := arg.(*DatetimeConversion); ok && types.IsText(argType) {
+			argType = types.DatetimeMaxPrecision
+		}
+
 		if types.IsTuple(argType) {
 			return nil, sql.ErrInvalidType.New("tuple")
 		} else if types.IsNumber(argType) {
 			allString = false
-			allDatetime = false
+			allDate = false
 			if !types.IsInteger(argType) {
 				allInt = false
 			}
@@ -246,10 +294,14 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 			argTypes = append(argTypes, argType)
 		} else if types.IsText(argType) {
 			allInt = false
-			allDatetime = false
+			allDate = false
 		} else if types.IsTime(argType) {
 			allString = false
 			allInt = false
+			anyTime = true
+			if !types.IsDateType(argType) {
+				allDate = false
+			}
 		} else if types.IsDeferredType(argType) {
 			return argType, nil
 		} else if argType == types.Null {
@@ -264,7 +316,12 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 		return types.LongText, nil
 	} else if allInt {
 		return types.Int64, nil
-	} else if allDatetime {
+	} else if anyTime && len(argTypes) == 0 {
+		// times, alone or with text: MySQL compares them all as times, so text
+		// such as '2024-01-01' or CURDATE() is read as the time it names
+		if allDate {
+			return types.Date, nil
+		}
 		return types.DatetimeMaxPrecision, nil
 	} else if anyDecimal && !anyFloat && len(argTypes) == len(args) {
 		// only numeric arguments, at least one an exact decimal: the result

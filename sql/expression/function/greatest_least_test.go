@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/stretchr/testify/require"
@@ -285,4 +286,115 @@ func TestLeast(t *testing.T) {
 			require.Equal(tt.expected, output)
 		})
 	}
+}
+
+// TestGreatestLeastTemporal: a time compared with text or another time is
+// compared as a time, as MySQL does, in either argument order; the result is a
+// DATE when every argument is a DATE, otherwise a DATETIME.
+func TestGreatestLeastTemporal(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	qt := ctx.QueryTime()
+	today := time.Date(qt.Year(), qt.Month(), qt.Day(), 0, 0, 0, 0, time.UTC)
+
+	at := func(s string) time.Time {
+		v, err := time.Parse("2006-01-02 15:04:05", s)
+		require.NoError(t, err)
+		return v
+	}
+	datetime := func(s string) sql.Expression {
+		return expression.NewLiteral(at(s), types.DatetimeMaxPrecision)
+	}
+	date := func(s string) sql.Expression {
+		return expression.NewLiteral(at(s+" 00:00:00"), types.Date)
+	}
+	text := func(s string) sql.Expression {
+		return expression.NewLiteral(s, types.LongText)
+	}
+	timestampOf := func(s string) sql.Expression {
+		f, err := NewDatetime(ctx, text(s))
+		require.NoError(t, err)
+		return f
+	}
+
+	testCases := []struct {
+		name            string
+		args            []sql.Expression
+		typ             sql.Type
+		greatest, least interface{}
+	}{
+		{
+			"datetime and string",
+			[]sql.Expression{datetime("2026-03-15 06:00:00"), text("2026-04-01")},
+			types.DatetimeMaxPrecision, at("2026-04-01 00:00:00"), at("2026-03-15 06:00:00"),
+		},
+		{
+			"string and datetime",
+			[]sql.Expression{text("2026-04-01"), datetime("2026-03-15 06:00:00")},
+			types.DatetimeMaxPrecision, at("2026-04-01 00:00:00"), at("2026-03-15 06:00:00"),
+		},
+		{
+			"datetime and TIMESTAMP()",
+			[]sql.Expression{datetime("2026-03-15 06:00:00"), timestampOf("2026-04-01")},
+			types.DatetimeMaxPrecision, at("2026-04-01 00:00:00"), at("2026-03-15 06:00:00"),
+		},
+		{
+			"two TIMESTAMP()s",
+			[]sql.Expression{timestampOf("2026-04-01"), timestampOf("2026-05-01")},
+			types.DatetimeMaxPrecision, at("2026-05-01 00:00:00"), at("2026-04-01 00:00:00"),
+		},
+		{
+			"datetime and CURDATE()",
+			[]sql.Expression{datetime("1999-01-01 12:00:00"), NewCurrDate(ctx)},
+			types.DatetimeMaxPrecision, today, at("1999-01-01 12:00:00"),
+		},
+		{
+			"date and string",
+			[]sql.Expression{date("2024-01-10"), text("2025-01-01")},
+			types.DatetimeMaxPrecision, at("2025-01-01 00:00:00"), at("2024-01-10 00:00:00"),
+		},
+		{
+			"date and datetime",
+			[]sql.Expression{date("2024-01-10"), datetime("2024-01-10 08:00:00")},
+			types.DatetimeMaxPrecision, at("2024-01-10 08:00:00"), at("2024-01-10 00:00:00"),
+		},
+		{
+			"dates",
+			[]sql.Expression{date("2027-01-10"), date("2024-01-10")},
+			types.Date, at("2027-01-10 00:00:00"), at("2024-01-10 00:00:00"),
+		},
+		{
+			"datetime and a NULL string",
+			[]sql.Expression{datetime("2026-03-15 06:00:00"), expression.NewLiteral(nil, types.LongText)},
+			types.DatetimeMaxPrecision, nil, nil,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			require := require.New(t)
+
+			g, err := NewGreatest(ctx, tt.args...)
+			require.NoError(err)
+			require.Equal(tt.typ, g.Type(ctx))
+			output, err := g.Eval(ctx, nil)
+			require.NoError(err)
+			require.Equal(tt.greatest, output)
+
+			l, err := NewLeast(ctx, tt.args...)
+			require.NoError(err)
+			require.Equal(tt.typ, l.Type(ctx))
+			output, err = l.Eval(ctx, nil)
+			require.NoError(err)
+			require.Equal(tt.least, output)
+		})
+	}
+
+	t.Run("a string that is not a time fails", func(t *testing.T) {
+		for _, newF := range []func(*sql.Context, ...sql.Expression) (sql.Expression, error){NewGreatest, NewLeast} {
+			f, err := newF(ctx, datetime("2026-03-15 06:00:00"), text("not a date"))
+			require.NoError(t, err)
+			_, err = f.Eval(ctx, nil)
+			require.Error(t, err)
+		}
+	})
 }

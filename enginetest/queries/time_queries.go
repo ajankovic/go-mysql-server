@@ -103,6 +103,49 @@ var TimeQueryTests = []ScriptTest{
 // TemporalScriptTests contains self-contained temporal script tests.
 var TemporalScriptTests = []ScriptTest{
 	{
+		// GREATEST and LEAST compare a time with text as a time, as MySQL does,
+		// so clipping a period to a quarter counts its days. The expected values
+		// are MySQL 8.0's.
+		Name: "greatest and least over times mixed with text",
+		SetUpScript: []string{
+			"create table periods (id int primary key, d date, s datetime(6), e datetime(6));",
+			"insert into periods values (1, '2024-01-10', '2026-03-15 06:00:00', '2026-08-20 18:00:00');",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "select greatest(s, '2026-04-01'), greatest('2026-04-01', s), least(e, '2026-07-01'), least('2026-07-01', e) from periods;",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+					time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+				}},
+			},
+			{
+				Query: "select greatest(s, timestamp('2026-04-01')), least(timestamp('2026-07-01'), e) from periods;",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+				}},
+			},
+			{
+				Query:    "select greatest(d, '2025-01-01'), least(d, '2025-01-01') from periods;",
+				Expected: []sql.Row{{time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)}},
+			},
+			{
+				Query:    "select greatest(timestamp('2026-04-01'), timestamp('2026-05-01'));",
+				Expected: []sql.Row{{time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)}},
+			},
+			{
+				Query:    "select datediff(least(e, '2026-07-01'), greatest(s, '2026-04-01')), timestampdiff(day, greatest(s, '2026-04-01'), e) from periods;",
+				Expected: []sql.Row{{int64(91), int64(141)}},
+			},
+			{
+				// MySQL warns and skips the string; an error is what keeps the
+				// answer from silently counting without it.
+				Query:       "select greatest(s, 'not a date') from periods;",
+				ExpectedErr: sql.ErrIncorrectValue,
+			},
+		},
+	},
+	{
 		Name:    "unix_timestamp function usage",
 		Dialect: "mysql",
 		SetUpScript: []string{
