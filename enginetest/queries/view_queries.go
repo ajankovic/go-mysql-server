@@ -172,9 +172,13 @@ CREATE TABLE tab1 (
 				ExpectedColumns: sql.Schema{
 					{
 						Name: "today",
-						Type: types.LongText,
+						Type: types.Date,
 					},
 				},
+			},
+			{
+				Query:    "select data_type from information_schema.columns where table_name = 'v_today';",
+				Expected: []sql.Row{{"date"}},
 			},
 			{
 				Query:       "CREATE VIEW xyv (u) AS SELECT * from xy;",
