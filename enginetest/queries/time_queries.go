@@ -401,6 +401,30 @@ var TemporalScriptTests = []ScriptTest{
 		},
 	},
 	{
+		// The assertions hold on any day.
+		Name:    "curdate is a date",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (id int primary key, ts timestamp, d date);",
+			"insert into t values (1, '2026-08-20 18:00:00', '2026-08-20');",
+			"create table today as select curdate() a, current_date() b, ifnull(ts, curdate()) c, ifnull(d, curdate()) dd from t;",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select column_name, data_type from information_schema.columns where table_name = 'today' order by ordinal_position;",
+				Expected: []sql.Row{{"a", "date"}, {"b", "date"}, {"c", "datetime"}, {"dd", "date"}},
+			},
+			{
+				Query:    "select ifnull(ts, curdate()) > '2026-7-1', ifnull(d, curdate()) > '2026-7-1' from t;",
+				Expected: []sql.Row{{true, true}},
+			},
+			{
+				Query:    "select curdate() = date(now()), curdate() + 0 = date_format(now(), '%Y%m%d') + 0;",
+				Expected: []sql.Row{{true, true}},
+			},
+		},
+	},
+	{
 		// https://github.com/dolthub/dolt/issues/11512
 		Name:    "HOUR preserves extended TIME column values",
 		Dialect: "mysql",
