@@ -76,7 +76,17 @@ func (c *Coalesce) Type(ctx *sql.Context) sql.Type {
 		if argType == nil || argType == types.Null {
 			continue
 		}
-		if retType.Equals(argType) {
+		// TIME's Equals ignores precision; two TIMEs merge below to keep the wider one
+		if retType.Equals(argType) && !types.IsTimespan(argType) {
+			continue
+		}
+
+		// GetConvertToType below is for comparisons and answers CHAR for any
+		// non-numeric pair, so times (TIME too, and a time after a NULL) merge
+		// through GeneralizeTypes, as in IF and IFNULL
+		if (retType == types.Null || types.IsTime(retType) || types.IsTimespan(retType)) &&
+			(types.IsTime(argType) || types.IsTimespan(argType)) {
+			retType = types.GeneralizeTypes(retType, argType)
 			continue
 		}
 

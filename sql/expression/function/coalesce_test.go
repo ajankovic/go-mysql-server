@@ -16,7 +16,9 @@ package function
 
 import (
 	"testing"
+	"time"
 
+	"github.com/dolthub/vitess/go/sqltypes"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -226,6 +228,99 @@ func TestCoalesce(t *testing.T) {
 			},
 			expected: "abc",
 			typ:      types.MustCreateSetType([]string{"abc"}, sql.Collation_Default),
+			nullable: false,
+		},
+		{
+			// MySQL types COALESCE over times, or over NULL and a time, as a time
+			name: "coalesce(NULL, datetime)",
+			input: []sql.Expression{
+				expression.NewLiteral(nil, types.Null),
+				expression.NewLiteral(time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC), types.Datetime),
+			},
+			expected: time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC),
+			typ:      types.Datetime,
+			nullable: false,
+		},
+		{
+			name: "coalesce(NULL, date)",
+			input: []sql.Expression{
+				expression.NewLiteral(nil, types.Null),
+				expression.NewLiteral(time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC), types.Date),
+			},
+			expected: time.Date(2026, 7, 5, 0, 0, 0, 0, time.UTC),
+			typ:      types.Date,
+			nullable: false,
+		},
+		{
+			name: "coalesce(NULL, timestamp)",
+			input: []sql.Expression{
+				expression.NewLiteral(nil, types.Null),
+				expression.NewLiteral(time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC), types.Timestamp),
+			},
+			expected: time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC),
+			typ:      types.Timestamp,
+			nullable: false,
+		},
+		{
+			name: "coalesce(NULL, time)",
+			input: []sql.Expression{
+				expression.NewLiteral(nil, types.Null),
+				expression.NewLiteral(types.Timespan((10*time.Hour+11*time.Minute+12*time.Second)/time.Microsecond), types.Time),
+			},
+			expected: types.Timespan((10*time.Hour + 11*time.Minute + 12*time.Second) / time.Microsecond),
+			typ:      types.Time,
+			nullable: false,
+		},
+		{
+			name: "coalesce(timestamp, datetime(6))",
+			input: []sql.Expression{
+				expression.NewLiteral(time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC), types.Timestamp),
+				expression.NewLiteral(time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC), types.DatetimeMaxPrecision),
+			},
+			expected: time.Date(2026, 8, 20, 18, 0, 0, 0, time.UTC),
+			typ:      types.DatetimeMaxPrecision,
+			nullable: false,
+		},
+		{
+			name: "coalesce(date, datetime(6))",
+			input: []sql.Expression{
+				expression.NewLiteral(time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), types.Date),
+				expression.NewLiteral(time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC), types.DatetimeMaxPrecision),
+			},
+			expected: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC),
+			typ:      types.DatetimeMaxPrecision,
+			nullable: false,
+		},
+		{
+			name: "coalesce(datetime(6), NULL, date)",
+			input: []sql.Expression{
+				expression.NewLiteral(nil, types.DatetimeMaxPrecision),
+				expression.NewLiteral(nil, types.Null),
+				expression.NewLiteral(time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), types.Date),
+			},
+			expected: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC),
+			typ:      types.DatetimeMaxPrecision,
+			nullable: false,
+		},
+		{
+			name: "coalesce(time(6), date)",
+			input: []sql.Expression{
+				expression.NewLiteral(nil, types.TimeMaxPrecision),
+				expression.NewLiteral(time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), types.Date),
+			},
+			expected: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC),
+			typ:      types.DatetimeMaxPrecision,
+			nullable: false,
+		},
+		{
+			// a time merged with text is text, as in MySQL
+			name: "coalesce(datetime, varchar)",
+			input: []sql.Expression{
+				expression.NewLiteral(time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC), types.Datetime),
+				expression.NewLiteral("x", types.MustCreateStringWithDefaults(sqltypes.VarChar, 20)),
+			},
+			expected: "2026-07-05 12:00:00",
+			typ:      types.LongText,
 			nullable: false,
 		},
 	}
