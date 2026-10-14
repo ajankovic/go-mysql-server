@@ -375,6 +375,10 @@ func convertValue(ctx *sql.Context, val any, castTo string, origType sql.Type, t
 			}
 			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
 		}
+		// Convert returns a TIME's value as it is, so a TIME cast to a lower precision is rounded here
+		if timespan, ok := val.(types.Timespan); ok {
+			val = timespan.Round(typeLength)
+		}
 		return val, nil
 	case ConvertToDecimal:
 		convType, err = createConvertedDecimalType(typeLength, typeScale)
