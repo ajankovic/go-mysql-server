@@ -52,7 +52,12 @@ func (t *DatetimeConversion) String() string {
 	return fmt.Sprintf("%s(%s)", t.FunctionName(), t.Date)
 }
 
+// Type implements the Expression interface. Eval always returns a DATETIME, so a DATE argument must not lend its type:
+// TIMESTAMP(d) is d at midnight and renders with its time of day, as MySQL types it.
 func (t *DatetimeConversion) Type(ctx *sql.Context) sql.Type {
+	if types.IsDateType(t.Date.Type(ctx)) {
+		return types.Datetime
+	}
 	return t.Date.Type(ctx)
 }
 

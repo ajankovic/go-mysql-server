@@ -108,7 +108,7 @@ func (f *Field) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return int64(0), nil
 	}
 
-	key, _, err = types.Text.Convert(ctx, key)
+	key, _, err = types.ConvertToLongText(ctx, key, f.args[0].Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func (f *Field) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			continue
 		}
 
-		val, _, err = types.Text.Convert(ctx, val)
+		val, _, err = types.ConvertToLongText(ctx, val, f.args[i].Type(ctx))
 		if err != nil {
 			return nil, err
 		}
