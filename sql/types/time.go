@@ -601,6 +601,7 @@ func (t TimespanType_) parseTimeDatetime(str string) (any, error) {
 	if !isDt {
 		return nil, err
 	}
+	dt = dt.UTC()
 	hours, mins, secs := dt.Clock()
 	nanos := int64(dt.Nanosecond())
 	return t.makeTime(false, int64(hours), int64(mins), int64(secs), nanos), err

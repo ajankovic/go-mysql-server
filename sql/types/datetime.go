@@ -249,6 +249,10 @@ func (t datetimeType) Convert(ctx context.Context, v any) (any, sql.ConvertInRan
 		return t.Convert(ctx, string(value))
 	case string:
 		res, _, err = t.parseDatetime(value)
+		// only a string that names its own offset parses outside UTC, so only those look up the session's zone
+		if tm, ok := res.(time.Time); ok && tm.Location() != time.UTC {
+			res = inSessionTimeZone(ctx, tm)
+		}
 	case Timespan:
 		// when receiving TIME, MySQL fills in date with today
 		nowTimeStr := sql.Now().Format("2006-01-02")
@@ -481,6 +485,11 @@ var (
 	//	Group 3: Seconds (optional)
 	DelimitedTimeRegex = regexp.MustCompile(`^(\d+)\p{P}*(\d+)?\p{P}*(\d+)?`)
 
+	// OffsetRegex matches a UTC offset that ends a datetime string, written as MySQL accepts it: a sign, two
+	// digits of hours, a colon and two digits of minutes.
+	// MySQL Reference: https://dev.mysql.com/doc/refman/8.4/en/date-and-time-literals.html
+	OffsetRegex = regexp.MustCompile(`^[+-]\d{2}:\d{2}$`)
+
 	// MicrosRegex matches strings representing microseconds.
 	// MySQL Reference: https://dev.mysql.com/doc/refman/8.4/en/datetime.html
 	MicrosRegex = regexp.MustCompile(`^(\.\d*)`)
@@ -621,6 +630,39 @@ func parseMicros(str string) (string, string) {
 	return str[:idx], str[idx:]
 }
 
+// inSessionTimeZone returns the wall clock the instant |t| reads in the session's time zone, which is how MySQL reads a
+// datetime string that names its own offset. Without a session, the wall clock is UTC's.
+func inSessionTimeZone(ctx context.Context, t time.Time) time.Time {
+	t = t.UTC()
+	sqlCtx, ok := ctx.(*sql.Context)
+	if !ok {
+		return t
+	}
+	tz, err := sql.SessionTimeZone(sqlCtx)
+	if err != nil {
+		return t
+	}
+	if res, ok := sql.ConvertTimeZone(t, "+00:00", tz); ok {
+		return res
+	}
+	return t
+}
+
+// parseOffset returns the offset |str| names, which OffsetRegex must have matched. It returns false for an offset MySQL
+// refuses: minutes over 59, more than fourteen hours either side of UTC, or -00:00.
+func parseOffset(str string) (time.Duration, bool) {
+	hours, _ := strconv.Atoi(str[1:3])
+	mins, _ := strconv.Atoi(str[4:6])
+	offset := time.Duration(hours)*time.Hour + time.Duration(mins)*time.Minute
+	if mins > 59 || offset > 14*time.Hour || str == "-00:00" {
+		return 0, false
+	}
+	if str[0] == '-' {
+		offset = -offset
+	}
+	return offset, true
+}
+
 // parseDatetime parses a Datetime according to MySQL rules.
 // The date portion (YYYY-MM-DD) is required while all parts of the time portion (HH:MM:SS.MICROS) is optional.
 // The standard datetime format is YYYY-MM-DD HH:MM:SS.MICROS, but MySQL supports a "relaxed" format where
@@ -684,19 +726,19 @@ func (t datetimeType) parseDatetime(str string) (any, bool, error) {
 	if len(hourStr) != 0 {
 		hour, err = strconv.Atoi(hourStr)
 		if err != nil {
-			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(value)
+			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(t.String(), str)
 		}
 	}
 	if len(minStr) != 0 {
 		mins, err = strconv.Atoi(minStr)
 		if err != nil {
-			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(value)
+			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(t.String(), str)
 		}
 	}
 	if len(secStr) != 0 {
 		sec, err = strconv.Atoi(secStr)
 		if err != nil {
-			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(value)
+			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(t.String(), str)
 		}
 	}
 
@@ -711,7 +753,7 @@ func (t datetimeType) parseDatetime(str string) (any, bool, error) {
 		var microf64 float64
 		microf64, err = strconv.ParseFloat(microStr, 64)
 		if err != nil {
-			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(value)
+			return nil, delimWarn, sql.ErrTruncatedIncorrect.New(t.String(), str)
 		}
 		micros = int(math.Round(microf64 * float64(microsPerSec)))
 	}
@@ -721,9 +763,20 @@ func (t datetimeType) parseDatetime(str string) (any, bool, error) {
 		return nil, delimWarn, sql.ErrIncorrectValue.New(t.String(), str)
 	}
 
+	// A UTC offset straight after the seconds names an instant. The time keeps the offset's zone, which tells Convert
+	// to read the instant in the session time zone, as MySQL 8.0.19 and later do.
+	if len(secStr) != 0 && OffsetRegex.MatchString(value) {
+		offset, ok := parseOffset(value)
+		if !ok {
+			return nil, delimWarn, sql.ErrIncorrectValue.New(t.String(), str)
+		}
+		resTime = resTime.Add(-offset).In(time.FixedZone("", int(offset/time.Second)))
+		value = ""
+	}
+
 	// detect trailing characters
 	if len(value) > 0 {
-		err = sql.ErrTruncatedIncorrect.New(value)
+		err = sql.ErrTruncatedIncorrect.New(t.String(), str)
 	}
 
 	return resTime, delimWarn, err
