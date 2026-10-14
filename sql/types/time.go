@@ -1084,3 +1084,17 @@ func (t Timespan) Subtract(other Timespan) Timespan {
 	}
 	return Timespan(v)
 }
+
+// Round returns a new Timespan rounded to the given number of fractional-second digits, half away from zero, as
+// MySQL rounds a TIME converted to a lower precision.
+func (t Timespan) Round(precision int) Timespan {
+	if precision >= MaxDatetimePrecision {
+		return t
+	}
+	unit := precisionConversion[MaxDatetimePrecision-precision]
+	rounded := (int64Abs(int64(t)) + unit/2) / unit * unit
+	if t < 0 {
+		return Timespan(-rounded)
+	}
+	return Timespan(rounded)
+}

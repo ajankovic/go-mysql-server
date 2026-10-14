@@ -132,9 +132,10 @@ func (f *factory) buildConvert(ctx *sql.Context, expr sql.Expression, castToType
 
 	// The converted type of a CHAR or BINARY conversion doesn't carry its length, so a conversion that may truncate
 	// its input can't be eliminated even when the types match.
-	// Explicit integer casts carry different decimal precision metadata from their operands, even when the SQL types
-	// are equal.
-	if !truncates && expr.Type(ctx).Equals(n.Type(ctx)) && (!explicit || !types.IsInteger(n.Type(ctx))) {
+	// Explicit integer casts carry different decimal precision metadata from their operands, and explicit TIME casts
+	// round to their own fractional precision, even when the SQL types are equal (TIME types are equal whatever their
+	// precision).
+	if !truncates && expr.Type(ctx).Equals(n.Type(ctx)) && (!explicit || !types.IsInteger(n.Type(ctx)) && !changesTimePrecision(expr.Type(ctx), n.Type(ctx))) {
 		f.log(ctx, "eliminated convert")
 		return expr, nil
 	}
@@ -147,6 +148,16 @@ func (f *factory) buildConvert(ctx *sql.Context, expr sql.Expression, castToType
 		return newNode, nil
 	}
 	return n, nil
+}
+
+// changesTimePrecision returns whether |from| and |to| are both TIME types with different fractional precision.
+func changesTimePrecision(from, to sql.Type) bool {
+	fromTime, ok := from.(types.TimeType)
+	if !ok {
+		return false
+	}
+	toTime, ok := to.(types.TimeType)
+	return ok && fromTime.Precision() != toTime.Precision()
 }
 
 func (f *factory) buildJoin(ctx *sql.Context, l, r sql.Node, op plan.JoinType, cond sql.Expression) (sql.Node, error) {
