@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/apd/v3"
+	"github.com/dolthub/vitess/go/sqltypes"
 	"gopkg.in/src-d/go-errors.v1"
 )
 
@@ -358,7 +359,13 @@ func IsConvertibleKeyType(colType Type, keyType Type) bool {
 			return colType.Equals(keyType)
 		}
 	case IsStringType(colType):
-		return !(IsNumberType(keyType) || IsDecimalType(keyType))
+		// A string compares with a number, a year or a date by converting the string, so a key
+		// converted to a string misses rows spelled differently: '2026-10-14' and
+		// '2026-10-14 00:00:00' both equal DATE '2026-10-14', and '2026-10-14' equals YEAR 2026
+		// as a number.
+		_, isDatetime := keyType.(DatetimeType)
+		isYear := keyType != nil && keyType.Type() == sqltypes.Year
+		return !(IsNumberType(keyType) || IsDecimalType(keyType) || isDatetime || isYear)
 	}
 	return true
 }
