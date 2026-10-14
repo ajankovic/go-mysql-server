@@ -246,6 +246,10 @@ func (t datetimeType) Convert(ctx context.Context, v any) (any, sql.ConvertInRan
 		return t.Convert(ctx, string(value))
 	case string:
 		res, err = t.parseDatetime(value)
+		// only a string that names its own offset parses outside UTC, so only those look up the session's zone
+		if tm, ok := res.(time.Time); ok && tm.Location() != time.UTC {
+			res = inSessionTimeZone(ctx, tm)
+		}
 	case Timespan:
 		// when receiving TIME, MySQL fills in date with today
 		nowTimeStr := sql.Now().Format("2006-01-02")
@@ -568,6 +572,52 @@ func readMicros(str string) (string, string) {
 	return str[:idx], str[idx:]
 }
 
+// inSessionTimeZone returns the wall clock the instant |t| reads in the session's time zone, which is how MySQL reads a
+// datetime string that names its own offset. Without a session, the wall clock is UTC's.
+func inSessionTimeZone(ctx context.Context, t time.Time) time.Time {
+	t = t.UTC()
+	sqlCtx, ok := ctx.(*sql.Context)
+	if !ok {
+		return t
+	}
+	tz, err := sql.SessionTimeZone(sqlCtx)
+	if err != nil {
+		return t
+	}
+	if res, ok := sql.ConvertTimeZone(t, "+00:00", tz); ok {
+		return res
+	}
+	return t
+}
+
+// parseOffset reads |str| as a UTC offset written as MySQL accepts one: a sign, two digits of hours, a colon and two
+// digits of minutes, which only whitespace may follow. |isOffset| reports whether |str| has that form, and |ok| whether
+// MySQL accepts its value: minutes up to 59, at most fourteen hours either side of UTC, and never -00:00.
+// MySQL Reference: https://dev.mysql.com/doc/refman/8.4/en/date-and-time-literals.html
+func parseOffset(str string) (offset time.Duration, isOffset bool, ok bool) {
+	if len(str) < 6 || (str[0] != '+' && str[0] != '-') || !isASCIIDigit(str[1]) || !isASCIIDigit(str[2]) ||
+		str[3] != ':' || !isASCIIDigit(str[4]) || !isASCIIDigit(str[5]) {
+		return 0, false, false
+	}
+	if _, rest := readFuncN(str[6:], -1, isMySQLDatetimeWhitespace); len(rest) > 0 {
+		return 0, false, false
+	}
+	hours := int(str[1]-'0')*10 + int(str[2]-'0')
+	mins := int(str[4]-'0')*10 + int(str[5]-'0')
+	offset = time.Duration(hours)*time.Hour + time.Duration(mins)*time.Minute
+	if mins > 59 || offset > 14*time.Hour || str[:6] == "-00:00" {
+		return 0, true, false
+	}
+	if str[0] == '-' {
+		offset = -offset
+	}
+	return offset, true, true
+}
+
+func isASCIIDigit(b byte) bool {
+	return '0' <= b && b <= '9'
+}
+
 // parseDatetime parses a Datetime according to MySQL rules.
 // The date portion (YYYY-MM-DD) is required while all parts of the time portion (HH:MM:SS.MICROS) is optional.
 // The standard datetime format is YYYY-MM-DD HH:MM:SS.MICROS, but MySQL supports a "relaxed" format where
@@ -679,6 +729,17 @@ func (t datetimeType) parseDatetime(origStr string) (any, error) {
 	secStr, str = readFuncN(str, numDigits, unicode.IsDigit)
 	microStr, str = readMicros(str)
 
+	// A UTC offset straight after the seconds names an instant, as MySQL 8.0.19 and later read it. It is read before
+	// the trailing '-' rule below, since a negative offset starts with '-'.
+	offset, hasOffset, ok := parseOffset(str)
+	hasOffset = hasOffset && len(secStr) > 0
+	if hasOffset {
+		if !ok {
+			return nil, sql.ErrIncorrectValue.New(t.String(), origStr)
+		}
+		str = ""
+	}
+
 	if len(str) > 0 {
 		// Trailing '-' after everything results in NULL
 		if str[0] == '-' {
@@ -710,6 +771,10 @@ func (t datetimeType) parseDatetime(origStr string) (any, error) {
 	res, ok := makeDatetime(year, month, day, hours, mins, secs, micros*int(nanosPerMicro))
 	if !ok {
 		return nil, sql.ErrIncorrectValue.New(t.String(), origStr)
+	}
+	// The time keeps the offset's zone, which tells Convert to read the instant in the session time zone.
+	if hasOffset {
+		res = res.Add(-offset).In(time.FixedZone("", int(offset/time.Second)))
 	}
 
 	return res, err

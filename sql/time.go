@@ -93,6 +93,25 @@ func MySQLOffsetToDuration(d string) (time.Duration, error) {
 	}
 }
 
+// SessionTimeZone returns the session's @@time_zone: a zone name or a MySQL offset such as "+05:00". SYSTEM is
+// returned as the system's current offset.
+func SessionTimeZone(ctx *Context) (string, error) {
+	sessionTimeZoneVar, err := ctx.GetSessionVariable(ctx, "time_zone")
+	if err != nil {
+		return "", err
+	}
+
+	sessionTimeZone, ok := sessionTimeZoneVar.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid type for @@session.time_zone: %T", sessionTimeZoneVar)
+	}
+
+	if sessionTimeZone == "SYSTEM" {
+		sessionTimeZone = SystemTimezoneOffset()
+	}
+	return sessionTimeZone, nil
+}
+
 // SystemTimezoneOffset returns the current system timezone offset as a MySQL timezone offset (e.g. "+01:00").
 func SystemTimezoneOffset() string {
 	t := Now()
@@ -133,16 +152,15 @@ func SecondsToMySQLOffset(offset int) string {
 // TODO: this function does not work as expected. it takes the current time and converts it to what UTC would be if the
 // datetime is in the given location. The converted time also assumes UTC as its location.
 func ConvertTimeToLocation(datetime time.Time, location string) (time.Time, error) {
-	// Try to load the timezone location string first
-	loc, err := time.LoadLocation(location)
-	if err == nil {
-		return getCopy(datetime, loc), nil
-	}
-
-	// If we can't parse a timezone location string, then try to parse a MySQL location offset
+	// An offset names no zone file, so it is tried first: a failed time.LoadLocation searches the zone database
 	duration, err := MySQLOffsetToDuration(location)
 	if err == nil {
 		return getCopy(datetime, time.UTC).Add(-1 * duration), nil
+	}
+
+	loc, err := time.LoadLocation(location)
+	if err == nil {
+		return getCopy(datetime, loc), nil
 	}
 
 	return time.Time{}, ErrInvalidTimeZone.New(location)

@@ -622,6 +622,69 @@ var TemporalScriptTests = []ScriptTest{
 		},
 	},
 	{
+		// MySQL 8.0.19 and later read a UTC offset written straight after the seconds, and convert the instant it
+		// names to the session time zone.
+		Name:    "datetime strings with a utc offset",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"set time_zone = '+00:00';",
+			"create table t (pk int primary key, dt datetime(6), ts timestamp, d date);",
+			"insert into t values (1, '2026-04-01 06:30:00+02:00', '2026-04-01T06:30:00+02:00', '2026-04-01');",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select dt, ts from t;",
+				Expected: []sql.Row{{time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC), time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC)}},
+			},
+			{
+				Query:    "select count(*) from t where dt > '2026-04-01 06:30:00+03:00' and ts > '2026-04-01 06:30:00+03:00';",
+				Expected: []sql.Row{{int64(1)}},
+			},
+			{
+				// MySQL answers 0: it drops the offset where it does not fold the string into a DATETIME, as against a DATE.
+				Query:    "select count(*) from t where d = '2026-04-01 02:00:00+02:00';",
+				Expected: []sql.Row{{int64(1)}},
+			},
+			{
+				Query: "select cast('2026-04-01 06:30:00+02:00' as datetime), cast('2026-04-01T06:30:00+02:00' as datetime), cast('2026-04-01 06:30:00-05:30' as datetime);",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC), time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC),
+					time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC),
+				}},
+			},
+			{
+				Query:    "select date('2026-04-02 01:00:00+02:00'), datediff('2026-04-02 01:00:00+02:00', '2026-04-01'), timestamp('2026-04-01 06:30:00+02:00');",
+				Expected: []sql.Row{{time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), int64(0), time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC)}},
+			},
+			{
+				Query:                           "select cast('2026-04-01 06:30:00-00:00' as datetime);",
+				Expected:                        []sql.Row{{nil}},
+				ExpectedWarning:                 1292,
+				ExpectedWarningsCount:           1,
+				ExpectedWarningMessageSubstring: "Incorrect datetime value: '2026-04-01 06:30:00-00:00'",
+			},
+			{
+				// a Z is not an offset
+				Query:                           "select cast('2026-04-01 06:30:00Z' as datetime);",
+				Expected:                        []sql.Row{{time.Date(2026, 4, 1, 6, 30, 0, 0, time.UTC)}},
+				ExpectedWarning:                 1292,
+				ExpectedWarningsCount:           1,
+				ExpectedWarningMessageSubstring: "Truncated incorrect datetime value: '2026-04-01 06:30:00Z'",
+			},
+			{
+				Query:    "set time_zone = '+05:00';",
+				Expected: []sql.Row{{types.NewOkResult(0)}},
+			},
+			{
+				Query: "select cast('2026-04-01 06:30:00+02:00' as datetime), cast('2026-04-01T06:30:00+02:00' as datetime), cast('2026-04-01 06:30:00+00:00' as datetime), unix_timestamp('2026-04-01 06:30:00+02:00');",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 9, 30, 0, 0, time.UTC), time.Date(2026, 4, 1, 9, 30, 0, 0, time.UTC),
+					time.Date(2026, 4, 1, 11, 30, 0, 0, time.UTC), int64(1775017800),
+				}},
+			},
+		},
+	},
+	{
 		// https://github.com/dolthub/dolt/issues/10088
 		Name:    "datetime with zero date and non-zero times",
 		Dialect: "mysql",
