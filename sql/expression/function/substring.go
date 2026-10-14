@@ -179,7 +179,7 @@ func (s *Substring) Resolved() bool {
 }
 
 // Type implements the Expression interface.
-func (s *Substring) Type(ctx *sql.Context) sql.Type { return s.Str.Type(ctx) }
+func (s *Substring) Type(ctx *sql.Context) sql.Type { return stringResultType(ctx, s.Str) }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (s *Substring) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -370,29 +370,15 @@ func (l Left) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var text []rune
-	switch str := str.(type) {
-	case string:
-		text = []rune(str)
-	case sql.StringWrapper:
-		s, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(s)
-	case []byte:
-		text = []rune(string(str))
-	case sql.BytesWrapper:
-		b, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(string(b))
-	case nil:
+	if str == nil {
 		return nil, nil
-	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
 	}
+
+	s, _, err := types.ConvertToCollatedString(ctx, str, l.str.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	text := []rune(s)
 
 	var length int64
 	runeCount := int64(len(text))
@@ -488,29 +474,15 @@ func (r Right) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var text []rune
-	switch str := str.(type) {
-	case string:
-		text = []rune(str)
-	case sql.StringWrapper:
-		s, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(s)
-	case []byte:
-		text = []rune(string(str))
-	case sql.BytesWrapper:
-		b, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(string(b))
-	case nil:
+	if str == nil {
 		return nil, nil
-	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
 	}
+
+	s, _, err := types.ConvertToCollatedString(ctx, str, r.str.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	text := []rune(s)
 
 	var length int64
 	runeCount := int64(len(text))
@@ -616,58 +588,30 @@ func (i Instr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var text []rune
-	switch str := str.(type) {
-	case string:
-		text = []rune(str)
-	case sql.StringWrapper:
-		s, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(s)
-	case []byte:
-		text = []rune(string(str))
-	case sql.BytesWrapper:
-		s, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(string(s))
-	case nil:
+	if str == nil {
 		return nil, nil
-	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
 	}
+
+	s, _, err := types.ConvertToCollatedString(ctx, str, i.str.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	text := []rune(s)
 
 	substr, err := i.substr.Eval(ctx, row)
 	if err != nil {
 		return nil, err
 	}
 
-	var subtext []rune
-	switch substr := substr.(type) {
-	case string:
-		subtext = []rune(substr)
-	case sql.StringWrapper:
-		s, err := substr.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(s)
-	case []byte:
-		subtext = []rune(string(substr))
-	case sql.BytesWrapper:
-		s, err := substr.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		subtext = []rune(string(s))
-	case nil:
+	if substr == nil {
 		return nil, nil
-	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
 	}
+
+	s, _, err = types.ConvertToCollatedString(ctx, substr, i.substr.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	subtext := []rune(s)
 
 	return findSubsequence(text, subtext) + 1, nil
 }

@@ -219,6 +219,71 @@ var StringFunctionsScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		Name:    "string functions read a time as text and return text",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"CREATE TABLE t (id INT PRIMARY KEY, d DATE, dt DATETIME, ts TIMESTAMP, tm TIME);",
+			"INSERT INTO t VALUES (1, '2026-08-20', '2026-08-20 13:45:10', '2026-08-20 13:45:10', '13:45:10');",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "SELECT LEFT(dt, 4), RIGHT(dt, 8), LEFT(ts, 4), RIGHT(ts, 8), LEFT(tm, 5), LEFT(d, 4), LEFT(NOW(), 4) = YEAR(NOW()) FROM t;",
+				Expected: []sql.Row{{"2026", "13:45:10", "2026", "13:45:10", "13:45", "2026", true}},
+			},
+			{
+				Query:    "SELECT INSTR(dt, ' '), INSTR(ts, '-'), INSTR(tm, ':'), INSTR(d, '-'), INSTR('on 2026-08-20 13:45:10', dt) FROM t;",
+				Expected: []sql.Row{{11, 5, 3, 5, 4}},
+			},
+			{
+				// A TIME is compared with CONCAT's reading of it, which these functions must share.
+				Query:    "SELECT CRC32(dt), CRC32(ts), CRC32(tm) = CRC32(CONCAT(tm)), HEX(tm) = HEX(CONCAT(tm)) FROM t;",
+				Expected: []sql.Row{{uint32(369419953), uint32(369419953), true, true}},
+			},
+			{
+				Query:    "SELECT SUBSTRING(dt, 1, 4) = '2026', SUBSTR(ts, 6) = '08-20 13:45:10', MID(dt, 12, 5) = '13:45', CAST(SUBSTRING(tm, 1, 5) AS CHAR) FROM t;",
+				Expected: []sql.Row{{true, true, true, "13:45"}},
+			},
+			{
+				Query:    "SELECT REVERSE(dt) = '01:54:31 02-80-6202', REVERSE(ts) = '01:54:31 02-80-6202' FROM t;",
+				Expected: []sql.Row{{true, true}},
+			},
+			{
+				Query:    "SELECT CONVERT(dt USING utf8mb4), CONVERT(ts USING utf8mb4) FROM t;",
+				Expected: []sql.Row{{"2026-08-20 13:45:10", "2026-08-20 13:45:10"}},
+			},
+			{
+				Query:    "SELECT CAST(LOWER(dt) AS CHAR), CAST(UPPER(ts) AS CHAR), CAST(TRIM(dt) AS CHAR), CAST(LTRIM(dt) AS CHAR), CAST(RTRIM(ts) AS CHAR) FROM t;",
+				Expected: []sql.Row{{"2026-08-20 13:45:10", "2026-08-20 13:45:10", "2026-08-20 13:45:10", "2026-08-20 13:45:10", "2026-08-20 13:45:10"}},
+			},
+			{
+				Query:    "SELECT CAST(TRIM(LEADING '2' FROM dt) AS CHAR) FROM t;",
+				Expected: []sql.Row{{"026-08-20 13:45:10"}},
+			},
+			{
+				Query:    "CREATE TABLE c1 AS SELECT LOWER(dt) a, UPPER(tm) b, TRIM(dt) c, LTRIM(tm) dd, RTRIM(ts) e FROM t;",
+				Expected: []sql.Row{{types.NewOkResult(1)}},
+			},
+			{
+				// MySQL types these VARCHAR; GMS types its string results LONGTEXT, as it does CONCAT's.
+				Query:    "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'c1' ORDER BY ordinal_position;",
+				Expected: []sql.Row{{"a", "longtext"}, {"b", "longtext"}, {"c", "longtext"}, {"dd", "longtext"}, {"e", "longtext"}},
+			},
+			{
+				Query:    "CREATE TABLE c2 AS SELECT SUBSTRING(dt, 1, 4) a, MID(tm, 1, 2) b, REVERSE(dt) c, CONVERT(dt USING utf8mb4) dd, LEFT(tm, 2) e FROM t;",
+				Expected: []sql.Row{{types.NewOkResult(1)}},
+			},
+			{
+				// MySQL types these VARCHAR; GMS types its string results LONGTEXT, as it does CONCAT's.
+				Query:    "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'c2' ORDER BY ordinal_position;",
+				Expected: []sql.Row{{"a", "longtext"}, {"b", "longtext"}, {"c", "longtext"}, {"dd", "longtext"}, {"e", "longtext"}},
+			},
+			{
+				Query:    "SELECT * FROM c2;",
+				Expected: []sql.Row{{"2026", "13", "01:54:31 02-80-6202", "2026-08-20 13:45:10", "13"}},
+			},
+		},
+	},
 
 	// Set tests
 	{

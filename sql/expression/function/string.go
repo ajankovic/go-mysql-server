@@ -255,6 +255,13 @@ func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	case types.GeometryValue:
 		return hexForString(string(val.Serialize())), nil
 
+	case types.Timespan:
+		s, _, err := types.ConvertToCollatedString(ctx, val, h.Child.Type(ctx))
+		if err != nil {
+			return nil, err
+		}
+		return hexForString(s), nil
+
 	default:
 		return nil, sql.ErrInvalidArgumentDetails.New("hex", fmt.Sprint(arg))
 	}

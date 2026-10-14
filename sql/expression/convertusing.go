@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/encodings"
+	"github.com/dolthub/go-mysql-server/sql/types"
 )
 
 // ConvertUsing represents a CONVERT(X USING T) operation that casts the expression X to the character set T.
@@ -52,7 +53,8 @@ func (c *ConvertUsing) Type(ctx *sql.Context) sql.Type {
 		newTyp, _ := collatedType.WithNewCollation(c.TargetCharSet.DefaultCollation())
 		return newTyp
 	}
-	return typ
+	// A number or a time is converted as its text, so the result is text rather than the argument's type.
+	return types.CreateLongText(c.TargetCharSet.DefaultCollation())
 }
 
 // Eval implements the interface sql.Expression.
@@ -66,10 +68,17 @@ func (c *ConvertUsing) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) 
 	}
 
 	var valBytes []byte
-	if v, ok := val.([]byte); ok {
+	switch v := val.(type) {
+	case []byte:
 		valBytes = v
-	} else if v, ok := val.(string); ok {
+	case string:
 		valBytes = encodings.StringToBytes(v)
+	default:
+		str, _, err := types.ConvertToCollatedString(ctx, val, c.Child.Type(ctx))
+		if err != nil {
+			return nil, err
+		}
+		valBytes = encodings.StringToBytes(str)
 	}
 
 	// Strings are stored internally as utf8mb4. A byte sequence that is not
