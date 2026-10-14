@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/dolthub/vitess/go/sqltypes"
@@ -166,6 +167,7 @@ func TestGeneralizeTypes(t *testing.T) {
 	time3 := MustCreateTimespanType(3)
 	datetime3 := MustCreateDatetimeType(sqltypes.Datetime, 3)
 	timestamp3 := MustCreateDatetimeType(sqltypes.Timestamp, 3)
+	uint64SystemVariable := NewSystemUintType("max_join_size", 1, math.MaxUint64)
 
 	tests := []struct {
 		typeA    sql.Type
@@ -207,6 +209,8 @@ func TestGeneralizeTypes(t *testing.T) {
 		{Text, Float64, LongText},
 		{Int64, Text, LongText},
 		{Int8, Null, Int8},
+		{uint64SystemVariable, Int8, uint64DecimalType},
+		{Int8, uint64SystemVariable, uint64DecimalType},
 		{Time, Time, Time},
 		{Time, TimeMaxPrecision, TimeMaxPrecision},
 		{TimeMaxPrecision, Time, TimeMaxPrecision},
