@@ -958,4 +958,138 @@ var IndexKeyTypesScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		// u has no index on s, so its answers show what the lookups on t must match.
+		Dialect: "mysql",
+		Name:    "date and datetime keys are not used for string column lookups",
+		SetUpScript: []string{
+			"create table t (i int primary key, s varchar(20), index (s))",
+			"insert into t values (1, '2026-10-13'), (2, '2026-10-14'), (3, '2026-10-14 12:00:00'), (4, '2026-10-15')",
+			"create table u (i int primary key, s varchar(20))",
+			"insert into u select * from t",
+			"create table d (i int primary key, dt datetime, ts timestamp)",
+			"insert into d values (1, '2026-10-14 00:00:00', '2026-10-14 00:00:00'), (2, '2026-10-14 12:00:00', '2026-10-14 12:00:00')",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select i from t where s = date('2026-10-14') order by i",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select i from t where s = cast('2026-10-14' as date) order by i",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select i from t where s >= date('2026-10-14') order by i",
+				Expected: []sql.Row{{2}, {3}, {4}},
+			},
+			{
+				Query:    "select i from t where s in (date('2026-10-13'), date('2026-10-15')) order by i",
+				Expected: []sql.Row{{1}, {4}},
+			},
+			{
+				Query:    "select i from t where s = cast('2026-10-14' as datetime) order by i",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select i from t where s >= cast('2026-10-14' as datetime) order by i",
+				Expected: []sql.Row{{2}, {3}, {4}},
+			},
+			{
+				Query:    "select i from t where s in (cast('2026-10-14 12:00:00' as datetime), date('2026-10-13')) order by i",
+				Expected: []sql.Row{{1}, {3}},
+			},
+			{
+				Query:    "select /*+ LOOKUP_JOIN(d,t) */ t.i, d.i from d join t on t.s = d.dt order by t.i",
+				Expected: []sql.Row{{2, 1}, {3, 2}},
+			},
+			{
+				Query:    "select /*+ LOOKUP_JOIN(d,t) */ t.i, d.i from d join t on t.s = d.ts order by t.i",
+				Expected: []sql.Row{{2, 1}, {3, 2}},
+			},
+			{
+				Query:    "select i from u where s = date('2026-10-14') order by i",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select i from u where s = cast('2026-10-14' as date) order by i",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select i from u where s >= date('2026-10-14') order by i",
+				Expected: []sql.Row{{2}, {3}, {4}},
+			},
+			{
+				Query:    "select i from u where s in (date('2026-10-13'), date('2026-10-15')) order by i",
+				Expected: []sql.Row{{1}, {4}},
+			},
+			{
+				Query:    "select i from u where s = cast('2026-10-14' as datetime) order by i",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select i from u where s >= cast('2026-10-14' as datetime) order by i",
+				Expected: []sql.Row{{2}, {3}, {4}},
+			},
+			{
+				Query:    "select i from u where s in (cast('2026-10-14 12:00:00' as datetime), date('2026-10-13')) order by i",
+				Expected: []sql.Row{{1}, {3}},
+			},
+			{
+				Query:    "select t.i, d.i from d join u t on t.s = d.dt order by t.i",
+				Expected: []sql.Row{{2, 1}, {3, 2}},
+			},
+			{
+				Query:    "select t.i, d.i from d join u t on t.s = d.ts order by t.i",
+				Expected: []sql.Row{{2, 1}, {3, 2}},
+			},
+		},
+	},
+	{
+		// u has no index on s, so its answers show what the lookups on t must match.
+		Dialect: "mysql",
+		Name:    "year keys are not used for string column lookups",
+		SetUpScript: []string{
+			"create table t (i int primary key, s varchar(20), index (s))",
+			"insert into t values (1, '2025'), (2, '2026'), (3, '2026-10-14'), (4, '26'), (5, '2027')",
+			"create table u (i int primary key, s varchar(20))",
+			"insert into u select * from t",
+			"create table y (i int primary key, yr year)",
+			"insert into y values (1, 2026), (2, 2027)",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select i from t where s = cast(2026 as year) order by i",
+				Expected: []sql.Row{{2}, {3}},
+			},
+			{
+				Query:    "select i from t where s <= cast(2026 as year) order by i",
+				Expected: []sql.Row{{1}, {2}, {3}, {4}},
+			},
+			{
+				Query:    "select i from t where s in (cast(2026 as year), cast(2027 as year)) order by i",
+				Expected: []sql.Row{{2}, {3}, {5}},
+			},
+			{
+				Query:    "select /*+ LOOKUP_JOIN(y,t) */ t.i, y.i from y join t on t.s = y.yr order by t.i",
+				Expected: []sql.Row{{2, 1}, {3, 1}, {5, 2}},
+			},
+			{
+				Query:    "select i from u where s = cast(2026 as year) order by i",
+				Expected: []sql.Row{{2}, {3}},
+			},
+			{
+				Query:    "select i from u where s <= cast(2026 as year) order by i",
+				Expected: []sql.Row{{1}, {2}, {3}, {4}},
+			},
+			{
+				Query:    "select i from u where s in (cast(2026 as year), cast(2027 as year)) order by i",
+				Expected: []sql.Row{{2}, {3}, {5}},
+			},
+			{
+				Query:    "select t.i, y.i from y join u t on t.s = y.yr order by t.i",
+				Expected: []sql.Row{{2, 1}, {3, 1}, {5, 2}},
+			},
+		},
+	},
 }
