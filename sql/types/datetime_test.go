@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"reflect"
@@ -392,6 +393,43 @@ func TestDatetimeConvert(t *testing.T) {
 			if val != nil {
 				assert.Equal(t, test.typ.ValueType(), reflect.TypeOf(val))
 			}
+		})
+	}
+}
+
+func TestDatetimeConvertOffset(t *testing.T) {
+	// without a session, an offset is read in UTC whatever the host's zone
+	ctx := context.Background()
+	tests := []struct {
+		typ         sql.Type
+		val         string
+		expectedVal any
+	}{
+		{Datetime, "2026-04-01 06:30:00+02:00", time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC)},
+		{Datetime, "2026-04-01 06:30:00-05:30", time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)},
+		{Datetime, "2026-04-01 06:30:00+14:00", time.Date(2026, 3, 31, 16, 30, 0, 0, time.UTC)},
+		{Datetime, "2026-04-01 06:30:00-14:00", time.Date(2026, 4, 1, 20, 30, 0, 0, time.UTC)},
+		{Datetime, "2026-04-01 06:30:00+00:00", time.Date(2026, 4, 1, 6, 30, 0, 0, time.UTC)},
+		{Datetime, "2026-04-01T06:30:00+02:00", time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC)},
+		{Datetime, "2026-04-01 06:30:00+02:00 \t", time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC)},
+		{DatetimeMaxPrecision, "2026-04-01 06:30:00.123456+02:00", time.Date(2026, 4, 1, 4, 30, 0, 123456000, time.UTC)},
+		{Timestamp, "2026-04-01 06:30:00+02:00", time.Date(2026, 4, 1, 4, 30, 0, 0, time.UTC)},
+		{Date, "2026-04-02 01:00:00+02:00", time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)},
+		{Time, "2026-04-02 01:00:00+02:00", Timespan(23 * 60 * 60 * 1_000_000)},
+		{Datetime, "2026-04-01 06:30:00-00:00", nil},
+		{Datetime, "2026-04-01 06:30:00+14:01", nil},
+		{Datetime, "2026-04-01 06:30:00-14:01", nil},
+		{Datetime, "2026-04-01 06:30:00+02:60", nil},
+	}
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("%v %v", test.typ, test.val), func(t *testing.T) {
+			val, _, err := test.typ.Convert(ctx, test.val)
+			if test.expectedVal == nil {
+				assert.True(t, sql.ErrIncorrectValue.Is(err), "expected ErrIncorrectValue, got %v", err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.expectedVal, val)
 		})
 	}
 }
