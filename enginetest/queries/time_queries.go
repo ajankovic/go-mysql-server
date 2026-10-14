@@ -785,6 +785,60 @@ var TemporalScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		Name:    "greatest and least compare times mixed with text or numbers as times",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (id int primary key, d date, dt datetime, ts timestamp);",
+			"insert into t values (1, '2024-01-10', '2026-03-15 06:00:00', '2026-08-20 18:00:00');",
+			"create table t2 as select greatest(ts, ts) a, greatest(ts, '2050-01-01') b, greatest(d, '2025-01-01 10:00:00') c, greatest(d, dt) dd, least(d, d) e from t;",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "select greatest(dt, '2026-04-01'), greatest('2026-04-01', dt), least(ts, '2026-07-01'), least('2026-07-01', ts) from t;",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+					time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+				}},
+			},
+			{
+				Query: "select greatest(dt, timestamp('2026-04-01')), least(timestamp('2026-07-01'), ts), greatest(timestamp(20260401), timestamp(20260501)) from t;",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+					time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+				}},
+			},
+			{
+				Query:    "select datediff(least(ts, '2026-07-01'), greatest(dt, '2026-04-01')), timestampdiff(day, greatest(dt, '2026-04-01'), ts) from t;",
+				Expected: []sql.Row{{int64(91), int64(141)}},
+			},
+			{
+				Query: "select greatest(dt, 20260401), least(ts, 20260701), (select count(*) from t where greatest(dt, 20260401) > '2026-04-02') from t;",
+				Expected: []sql.Row{{
+					time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), int64(0),
+				}},
+			},
+			{
+				Query:    "select greatest(d, '2025-01-01 10:00:00'), least(d, 20240110100000) from t;",
+				Expected: []sql.Row{{time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)}},
+			},
+			{
+				Query:    "select greatest(ts, '2050-01-01'), least(ts, 19600101), greatest(dt, '2026-04-01 10:00:00.6') from t;",
+				Expected: []sql.Row{{time.Date(2050, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(1960, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 1, 10, 0, 0, 600000000, time.UTC)}},
+			},
+			{
+				Query:                 "select greatest(dt, 'not a date'), least(dt, 99999999) from t;",
+				Expected:              []sql.Row{{time.Date(2026, 3, 15, 6, 0, 0, 0, time.UTC), time.Date(2026, 3, 15, 6, 0, 0, 0, time.UTC)}},
+				ExpectedWarning:       1292,
+				ExpectedWarningsCount: 2,
+			},
+			{
+				// MySQL types b and c as VARCHAR holding the same rendering
+				Query:    "select column_name, data_type from information_schema.columns where table_name = 't2' order by ordinal_position;",
+				Expected: []sql.Row{{"a", "timestamp"}, {"b", "datetime"}, {"c", "date"}, {"dd", "datetime"}, {"e", "date"}},
+			},
+		},
+	},
 }
 
 var BrokenTemporalScriptTests = []ScriptTest{
