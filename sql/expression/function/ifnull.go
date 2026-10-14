@@ -59,7 +59,7 @@ func (f *IfNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 	if left != nil {
-		if ret, _, err := t.Convert(ctx, left); err == nil {
+		if ret, err := convertToMergedType(ctx, left, f.LeftChild.Type(ctx), t); err == nil {
 			return ret, nil
 		}
 		return left, err
@@ -69,7 +69,7 @@ func (f *IfNull) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ret, _, err := t.Convert(ctx, right); err == nil {
+	if ret, err := convertToMergedType(ctx, right, f.RightChild.Type(ctx), t); err == nil {
 		return ret, nil
 	}
 	return right, err

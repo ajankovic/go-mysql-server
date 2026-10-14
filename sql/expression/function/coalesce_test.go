@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -207,6 +208,37 @@ func TestCoalesce(t *testing.T) {
 				expression.NewLiteral("abc", types.NewSystemStringType("str1")),
 			},
 			expected: "abc",
+			typ:      types.LongText,
+			nullable: false,
+		},
+		{
+			name: "coalesce(date, '')",
+			input: []sql.Expression{
+				expression.NewLiteral(time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), types.Date),
+				expression.NewLiteral("", types.LongText),
+			},
+			expected: "2026-08-20",
+			typ:      types.LongText,
+			nullable: false,
+		},
+		{
+			name: "coalesce(datetime(6), '')",
+			input: []sql.Expression{
+				expression.NewLiteral(time.Date(2026, 3, 15, 6, 0, 0, 123400000, time.UTC), types.DatetimeMaxPrecision),
+				expression.NewLiteral("", types.LongText),
+			},
+			expected: "2026-03-15 06:00:00.123400",
+			typ:      types.LongText,
+			nullable: false,
+		},
+		{
+			// LOWER and SUBSTRING return text under their argument's DATE type
+			name: "coalesce(text typed as date, '')",
+			input: []sql.Expression{
+				expression.NewLiteral("2026-08-20 00:00:00", types.Date),
+				expression.NewLiteral("", types.LongText),
+			},
+			expected: "2026-08-20 00:00:00",
 			typ:      types.LongText,
 			nullable: false,
 		},

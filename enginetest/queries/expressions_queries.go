@@ -231,6 +231,44 @@ var ExpressionsScriptTests = []ScriptTest{
 		},
 	},
 	{
+		Name:    "IF, IFNULL and COALESCE render a time merged with text by its own type",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (id int primary key, d date, dt6 datetime(6), ts timestamp(3));",
+			"insert into t values (1, '2026-08-20', '2026-03-15 06:00:00.1234', '2026-03-15 06:00:00.5'), (2, null, null, null);",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "select id, if(id = 1, d, 'n/a'), ifnull(d, 'n/a'), coalesce(d, 'n/a') from t order by id;",
+				Expected: []sql.Row{
+					{1, "2026-08-20", "2026-08-20", "2026-08-20"},
+					{2, "n/a", "n/a", "n/a"},
+				},
+			},
+			{
+				Query: "select id, if(id = 2, 'n/a', d), coalesce(null, d, 'n/a') from t order by id;",
+				Expected: []sql.Row{
+					{1, "2026-08-20", "2026-08-20"},
+					{2, "n/a", "n/a"},
+				},
+			},
+			{
+				Query: "select id, if(id = 1, dt6, 'n/a'), ifnull(dt6, 'n/a'), coalesce(dt6, 'n/a') from t order by id;",
+				Expected: []sql.Row{
+					{1, "2026-03-15 06:00:00.123400", "2026-03-15 06:00:00.123400", "2026-03-15 06:00:00.123400"},
+					{2, "n/a", "n/a", "n/a"},
+				},
+			},
+			{
+				Query: "select id, if(id = 1, ts, 'n/a'), ifnull(ts, 'n/a'), coalesce(ts, 'n/a') from t order by id;",
+				Expected: []sql.Row{
+					{1, "2026-03-15 06:00:00.500", "2026-03-15 06:00:00.500", "2026-03-15 06:00:00.500"},
+					{2, "n/a", "n/a", "n/a"},
+				},
+			},
+		},
+	},
+	{
 		// https://github.com/dolthub/dolt/issues/10243
 		Dialect: "mysql",
 		Name:    "OR filters are simplified to correct type",
