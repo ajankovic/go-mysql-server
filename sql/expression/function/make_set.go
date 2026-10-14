@@ -139,7 +139,7 @@ func (m *MakeSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 			}
 			// Skip NULL values
 			if val != nil {
-				valStr, _, err := types.LongText.Convert(ctx, val)
+				valStr, _, err := types.ConvertToLongText(ctx, val, valueExpr.Type(ctx))
 				if err != nil {
 					return nil, err
 				}

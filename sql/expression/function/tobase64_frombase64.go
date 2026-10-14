@@ -77,7 +77,7 @@ func (t *ToBase64) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 		strBytes = encodedBytes
 	} else {
-		val, _, err = types.LongBlob.Convert(ctx, val)
+		val, _, err = types.ConvertToLongBlob(ctx, val, t.Child.Type(ctx))
 		if err != nil {
 			return nil, sql.ErrInvalidType.New(reflect.TypeOf(val))
 		}

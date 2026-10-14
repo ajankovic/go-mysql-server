@@ -167,7 +167,7 @@ func (e *ExportSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		if sepVal == nil {
 			return nil, nil
 		}
-		sepStr, _, err := types.LongText.Convert(ctx, sepVal)
+		sepStr, _, err := types.ConvertToLongText(ctx, sepVal, e.separator.Type(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -208,7 +208,7 @@ func (e *ExportSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	onStr, _, err := types.LongText.Convert(ctx, onVal)
+	onStr, _, err := types.ConvertToLongText(ctx, onVal, e.on.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +219,7 @@ func (e *ExportSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	offStr, _, err := types.LongText.Convert(ctx, offVal)
+	offStr, _, err := types.ConvertToLongText(ctx, offVal, e.off.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

@@ -95,7 +95,7 @@ func evalString(ctx *sql.Context, expr sql.Expression, row sql.Row, targetCollat
 	if err != nil || v == nil {
 		return "", false, err
 	}
-	c, _, err := types.LongText.Convert(ctx, v)
+	c, _, err := types.ConvertToLongText(ctx, v, expr.Type(ctx))
 	if err != nil {
 		return "", false, err
 	}

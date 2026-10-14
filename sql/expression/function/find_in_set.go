@@ -95,7 +95,7 @@ func (f *FindInSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	lVal, _, err := types.LongText.Convert(ctx, left)
+	lVal, _, err := types.ConvertToLongText(ctx, left, f.LeftChild.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (f *FindInSet) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 	} else {
 		var rVal interface{}
-		rVal, _, err = types.LongText.Convert(ctx, right)
+		rVal, _, err = types.ConvertToLongText(ctx, right, f.RightChild.Type(ctx))
 		if err != nil {
 			return nil, err
 		}
