@@ -163,6 +163,9 @@ func TestColumnCharTypes(t *testing.T) {
 func TestGeneralizeTypes(t *testing.T) {
 	decimalType := MustCreateDecimalType(DecimalTypeMaxPrecision, DecimalTypeMaxScale)
 	uint64DecimalType := MustCreateDecimalType(DecimalTypeMaxPrecision, 0)
+	time3 := MustCreateTimespanType(3)
+	datetime3 := MustCreateDatetimeType(sqltypes.Datetime, 3)
+	timestamp3 := MustCreateDatetimeType(sqltypes.Timestamp, 3)
 
 	tests := []struct {
 		typeA    sql.Type
@@ -205,12 +208,21 @@ func TestGeneralizeTypes(t *testing.T) {
 		{Int64, Text, LongText},
 		{Int8, Null, Int8},
 		{Time, Time, Time},
-		{Time, Date, DatetimeMaxPrecision},
+		{Time, TimeMaxPrecision, TimeMaxPrecision},
+		{TimeMaxPrecision, Time, TimeMaxPrecision},
+		{Time, Date, Datetime},
+		{time3, Date, datetime3},
+		{Time, datetime3, datetime3},
 		{Date, Date, Date},
-		{Date, Timestamp, DatetimeMaxPrecision},
+		{Date, Datetime, Datetime},
+		{Date, datetime3, datetime3},
+		{Date, Timestamp, Datetime},
 		{Timestamp, Timestamp, Timestamp},
 		{Timestamp, TimestampMaxPrecision, TimestampMaxPrecision},
-		{Timestamp, Datetime, DatetimeMaxPrecision},
+		{Timestamp, timestamp3, timestamp3},
+		{Timestamp, Datetime, Datetime},
+		{Datetime, timestamp3, datetime3},
+		{datetime3, DatetimeMaxPrecision, DatetimeMaxPrecision},
 		{Null, Int64, Int64},
 		{Null, Null, Null},
 	}
