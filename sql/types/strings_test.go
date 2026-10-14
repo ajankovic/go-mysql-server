@@ -390,6 +390,39 @@ func TestStringConvert(t *testing.T) {
 	}
 }
 
+func TestConvertTimeToText(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	midnight := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name     string
+		typ      sql.Type
+		val      interface{}
+		expected string
+	}{
+		{"a date is its date alone", Date, midnight, "2026-08-20"},
+		{"a zero date is zeros", Date, ZeroTime, "0000-00-00"},
+		{"a datetime keeps its time", Datetime, midnight, "2026-08-20 00:00:00"},
+		{"a timestamp keeps its time", Timestamp, midnight, "2026-08-20 00:00:00"},
+		{"a time of unknown type keeps its time", LongText, midnight, "2026-08-20 00:00:00"},
+		{"text from a date-typed expression is kept", Date, "2026-08", "2026-08"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			text, _, err := ConvertToLongText(ctx, test.val, test.typ)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, text)
+
+			collated, _, err := ConvertToCollatedString(ctx, test.val, test.typ)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, collated)
+
+			bytes, _, err := ConvertToLongBlob(ctx, test.val, test.typ)
+			require.NoError(t, err)
+			assert.Equal(t, []byte(test.expected), bytes)
+		})
+	}
+}
+
 func TestStringString(t *testing.T) {
 	tests := []struct {
 		typ         sql.Type

@@ -239,15 +239,11 @@ func (h *Hex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return "0", nil
 
 	case time.Time:
-		s, err := formatDate("%Y-%m-%d %H:%i:%s", val)
-
+		s, _, err := types.ConvertToLongText(ctx, val, h.Child.Type(ctx))
 		if err != nil {
 			return nil, err
 		}
-
-		s += fractionOfSecString(val)
-
-		return hexForString(s), nil
+		return hexForString(s.(string)), nil
 
 	case []byte, sql.BytesWrapper:
 		b, _, err := sql.Unwrap[[]byte](ctx, val)
@@ -623,7 +619,7 @@ func (q *Quote) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	val, _, err := types.Blob.Convert(ctx, arg)
+	val, _, err := types.ConvertToLongBlob(ctx, arg, q.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

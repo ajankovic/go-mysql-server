@@ -95,6 +95,15 @@ func (s *StrCmp) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
+	expr1, _, err = types.ConvertToLongText(ctx, expr1, s.LeftChild.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	expr2, _, err = types.ConvertToLongText(ctx, expr2, s.RightChild.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+
 	collationPreference, _ := s.CollationCoercibility(ctx)
 
 	strType := types.CreateLongText(collationPreference)
