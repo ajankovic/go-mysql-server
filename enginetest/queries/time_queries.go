@@ -412,6 +412,43 @@ var TemporalScriptTests = []ScriptTest{
 		Expected: []sql.Row{{int32(25)}, {int32(13)}},
 	},
 	{
+		// A TIME reads as text with as many fractional digits as its precision.
+		Name:    "time as text has the fractional digits of its precision",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"CREATE TABLE t (id INT PRIMARY KEY, t0 TIME, t3 TIME(3), t6 TIME(6));",
+			"INSERT INTO t VALUES (1, '13:45:10', '13:45:10.123', '13:45:10.123456'), (2, '-838:59:59', '-00:00:01.5', '00:00:00');",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "SELECT CONCAT(t0), CONCAT(t3), CONCAT(t6), CAST(t0 AS CHAR), CAST(t3 AS CHAR) FROM t ORDER BY id;",
+				Expected: []sql.Row{
+					{"13:45:10", "13:45:10.123", "13:45:10.123456", "13:45:10", "13:45:10.123"},
+					{"-838:59:59", "-00:00:01.500", "00:00:00.000000", "-838:59:59", "-00:00:01.500"},
+				},
+			},
+			{
+				Query: "SELECT LOWER(t0), UPPER(t3), LENGTH(t0), LENGTH(t3), BIT_LENGTH(t6) FROM t ORDER BY id;",
+				Expected: []sql.Row{
+					{"13:45:10", "13:45:10.123", 8, 12, 120},
+					{"-838:59:59", "-00:00:01.500", 10, 13, 120},
+				},
+			},
+			{
+				Query:    "SELECT t0 LIKE '13:45:10', t3 LIKE '%.123', t6 LIKE '%:00' FROM t ORDER BY id;",
+				Expected: []sql.Row{{true, true, false}, {false, false, false}},
+			},
+			{
+				Query:    "SELECT GROUP_CONCAT(t0 ORDER BY id), GROUP_CONCAT(t3 ORDER BY id SEPARATOR ' ') FROM t;",
+				Expected: []sql.Row{{"13:45:10,-838:59:59", "13:45:10.123 -00:00:01.500"}},
+			},
+			{
+				Query:    "SELECT MD5(t0), REPLACE(CONCAT('a', t0), t0, 'b'), LOCATE(t3, CONCAT('x', t3)) FROM t WHERE id = 1;",
+				Expected: []sql.Row{{"ff09372e13c57e16eb863f26407b7952", "ab", 2}},
+			},
+		},
+	},
+	{
 		Name:    "timestamp timezone conversion",
 		Dialect: "mysql",
 		SetUpScript: []string{

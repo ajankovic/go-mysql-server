@@ -405,6 +405,9 @@ func TestConvertTimeToText(t *testing.T) {
 		{"a timestamp keeps its time", Timestamp, midnight, "2026-08-20 00:00:00"},
 		{"a time of unknown type keeps its time", LongText, midnight, "2026-08-20 00:00:00"},
 		{"text from a date-typed expression is kept", Date, "2026-08", "2026-08"},
+		{"a time has its precision's digits", Time, unitsToTimespan(false, 13, 45, 10, 0), "13:45:10"},
+		{"a time(3) has three", MustCreateTimespanType(3), unitsToTimespan(false, 13, 45, 10, 123000), "13:45:10.123"},
+		{"text from a time-typed expression is kept", Time, "13:45:10.208", "13:45:10.208"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -468,6 +471,30 @@ func TestStringString(t *testing.T) {
 		t.Run(fmt.Sprintf("%v %v", test.typ, test.expectedStr), func(t *testing.T) {
 			str := test.typ.String()
 			assert.Equal(t, test.expectedStr, str)
+		})
+	}
+}
+
+func TestConvertTimespanToCollatedString(t *testing.T) {
+	ctx := sql.NewEmptyContext()
+	tests := []struct {
+		name     string
+		typ      sql.Type
+		val      interface{}
+		expected string
+	}{
+		{"a time has no fractional digits", Time, unitsToTimespan(false, 13, 45, 10, 0), "13:45:10"},
+		{"a time(3) has three", MustCreateTimespanType(3), unitsToTimespan(false, 13, 45, 10, 123000), "13:45:10.123"},
+		{"a time(6) has six", TimeMaxPrecision, unitsToTimespan(false, 13, 45, 10, 123456), "13:45:10.123456"},
+		{"a negative time keeps its sign", MustCreateTimespanType(1), unitsToTimespan(true, 838, 59, 59, 500000), "-838:59:59.5"},
+		{"text from a time-typed expression is kept", Time, "13:45:10.208", "13:45:10.208"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			text, collation, err := ConvertToCollatedString(ctx, test.val, test.typ)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, text)
+			assert.Equal(t, sql.Collation_Default, collation)
 		})
 	}
 }
