@@ -657,7 +657,8 @@ func generalizeNumberTypes(a, b sql.Type) sql.Type {
 // TODO: Create and handle "Illegal mix of collations" error
 // TODO: Handle extended types, like DoltgresType
 func GeneralizeTypes(a, b sql.Type) sql.Type {
-	if a != nil && b != nil && a.Equals(b) {
+	// TIME's Equals ignores precision, so two TIME types are merged below to keep the wider one.
+	if a != nil && b != nil && a.Equals(b) && !IsTimespan(a) {
 		return a
 	}
 
@@ -693,19 +694,19 @@ func GeneralizeTypes(a, b sql.Type) sql.Type {
 
 	aIsTimespan := IsTimespan(a)
 	bIsTimespan := IsTimespan(b)
-	if aIsTimespan && bIsTimespan {
-		return Time
-	}
 	if (IsTime(a) || aIsTimespan) && (IsTime(b) || bIsTimespan) {
+		// MySQL gives merged times the widest fractional-seconds precision of the two; a DATE has none.
+		precision := max(timePrecision(a), timePrecision(b))
+		if aIsTimespan && bIsTimespan {
+			return MustCreateTimespanType(precision)
+		}
 		if IsDateType(a) && IsDateType(b) {
 			return Date
 		}
 		if IsTimestampType(a) && IsTimestampType(b) {
-			// TODO: match precision to max precision of the two timestamps
-			return TimestampMaxPrecision
+			return MustCreateDatetimeType(sqltypes.Timestamp, precision)
 		}
-		// TODO: match precision to max precision of the two time types
-		return DatetimeMaxPrecision
+		return MustCreateDatetimeType(sqltypes.Datetime, precision)
 	}
 
 	if IsBlobType(a) || IsBlobType(b) {
@@ -751,6 +752,17 @@ func GeneralizeTypes(a, b sql.Type) sql.Type {
 
 	// TODO: decide if we want to make this VarChar to match MySQL, match VarChar length to max of two types
 	return LongText
+}
+
+// timePrecision returns the fractional-seconds precision of a DATE, DATETIME, TIMESTAMP or TIME type.
+func timePrecision(t sql.Type) int {
+	switch t := t.(type) {
+	case sql.DatetimeType:
+		return t.Precision()
+	case TimeType:
+		return t.Precision()
+	}
+	return 0
 }
 
 // TypeAwareConversion converts a value to a specified type, with awareness of the value's original type. This is
