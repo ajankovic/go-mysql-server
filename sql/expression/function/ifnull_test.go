@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +26,8 @@ import (
 )
 
 func TestIfNull(t *testing.T) {
+	date := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	datetime := time.Date(2026, 3, 15, 6, 0, 0, 123400000, time.UTC)
 	testCases := []struct {
 		expression     interface{}
 		expressionType sql.Type
@@ -40,6 +43,9 @@ func TestIfNull(t *testing.T) {
 		{nil, types.LongText, nil, types.LongText, nil, types.LongText},
 		{"", types.LongText, nil, types.LongText, "", types.LongText},
 		{nil, types.Int8, 128, types.Int64, int64(128), types.Int64},
+		{date, types.Date, "foo", types.LongText, "2026-08-20", types.LongText},
+		{nil, types.LongText, date, types.Date, "2026-08-20", types.LongText},
+		{datetime, types.DatetimeMaxPrecision, "foo", types.LongText, "2026-03-15 06:00:00.123400", types.LongText},
 	}
 
 	ctx := sql.NewEmptyContext()

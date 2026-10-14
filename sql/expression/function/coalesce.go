@@ -221,7 +221,7 @@ func (c *Coalesce) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 
 		if !types.IsEnum(c.Type(ctx)) && !types.IsSet(c.Type(ctx)) {
-			val, _, err = c.Type(ctx).Convert(ctx, val)
+			val, err = convertToMergedType(ctx, val, arg.Type(ctx), c.Type(ctx))
 			if err != nil {
 				return nil, err
 			}
