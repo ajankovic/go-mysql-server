@@ -77,19 +77,15 @@ func (f *If) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		}
 	}
 
-	var eval interface{}
+	branch := f.ifFalse
 	if asBool {
-		eval, err = f.ifTrue.Eval(ctx, row)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		eval, err = f.ifFalse.Eval(ctx, row)
-		if err != nil {
-			return nil, err
-		}
+		branch = f.ifTrue
 	}
-	if ret, _, err := f.Type(ctx).Convert(ctx, eval); err == nil {
+	eval, err := branch.Eval(ctx, row)
+	if err != nil {
+		return nil, err
+	}
+	if ret, err := convertToMergedType(ctx, eval, branch.Type(ctx), f.Type(ctx)); err == nil {
 		return ret, nil
 	}
 	return eval, err
@@ -122,4 +118,17 @@ func (f *If) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.Exp
 		return nil, sql.ErrInvalidChildrenNumber.New(f, len(children), 3)
 	}
 	return NewIf(ctx, children[0], children[1], children[2]), nil
+}
+
+// convertToMergedType converts |val|, the value of an argument of type |argType|, to |typ|, the type IF, IFNULL and
+// COALESCE merge their arguments into. A time is converted by its argument's type, so a DATE becomes text as its date
+// and a DATETIME(6) keeps all six digits of its fraction; |typ|.Convert sees only the time.Time and can't tell these
+// apart. TypeAwareConversion refuses a value that doesn't match its argument's type, such as the text LOWER returns
+// under its argument's DATE type, so such a value is converted by |typ| alone.
+func convertToMergedType(ctx *sql.Context, val any, argType, typ sql.Type) (any, error) {
+	if ret, _, err := types.TypeAwareConversion(ctx, val, argType, typ); err == nil {
+		return ret, nil
+	}
+	ret, _, err := typ.Convert(ctx, val)
+	return ret, err
 }
