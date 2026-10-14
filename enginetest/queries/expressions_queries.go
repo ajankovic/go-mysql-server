@@ -15,6 +15,8 @@
 package queries
 
 import (
+	"time"
+
 	"github.com/dolthub/go-mysql-server/sql"
 	"github.com/dolthub/go-mysql-server/sql/types"
 )
@@ -302,6 +304,53 @@ var ExpressionsScriptTests = []ScriptTest{
 			{
 				Query:    "select x from test where (x between x and x) order by x",
 				Expected: []sql.Row{{1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}},
+			},
+		},
+	},
+	{
+		Name:    "IF, IFNULL and CASE over time types keep the widest fractional-seconds precision",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (pk int primary key, d date, dt datetime, dt3 datetime(3), ts timestamp, ts3 timestamp(3), tm time, tm3 time(3));",
+			"insert into t values (1, '2026-08-20', '2026-08-20 12:00:00', '2026-08-20 12:00:00.123', '2026-08-20 18:00:00', '2026-08-20 18:00:00.500', '10:00:00', '10:00:00.250');",
+			`create table r as select
+				ifnull(d, dt) as ifnull_d_dt,
+				if(pk = 1, d, dt) as if_d_dt,
+				case when pk = 1 then d else dt end as case_d_dt,
+				ifnull(d, dt3) as ifnull_d_dt3,
+				ifnull(dt, ts) as ifnull_dt_ts,
+				ifnull(ts, ts3) as ifnull_ts_ts3,
+				if(pk = 1, ts, ts3) as if_ts_ts3,
+				case when pk = 1 then ts else ts3 end as case_ts_ts3,
+				ifnull(dt, ts3) as ifnull_dt_ts3,
+				if(pk = 1, tm, tm3) as if_tm_tm3
+				from t;`,
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "select column_name, column_type from information_schema.columns where table_name = 'r' order by ordinal_position;",
+				Expected: []sql.Row{
+					{"ifnull_d_dt", "datetime"},
+					{"if_d_dt", "datetime"},
+					{"case_d_dt", "datetime"},
+					{"ifnull_d_dt3", "datetime(3)"},
+					{"ifnull_dt_ts", "datetime"},
+					{"ifnull_ts_ts3", "timestamp(3)"},
+					{"if_ts_ts3", "timestamp(3)"},
+					{"case_ts_ts3", "timestamp(3)"},
+					{"ifnull_dt_ts3", "datetime(3)"},
+					{"if_tm_tm3", "time(3)"},
+				},
+			},
+			{
+				Query: "select cast(ifnull(d, dt) as char), cast(case when pk = 1 then d else dt end as char), cast(ifnull(d, dt3) as char), cast(if(pk = 1, ts, ts3) as char), cast(if(pk = 1, tm, tm3) as char), cast(if(pk = 2, tm, tm3) as char) from t;",
+				Expected: []sql.Row{
+					{"2026-08-20 00:00:00", "2026-08-20 00:00:00", "2026-08-20 00:00:00.000", "2026-08-20 18:00:00.000", "10:00:00.000", "10:00:00.250"},
+				},
+			},
+			{
+				Query:    "select ifnull(d, dt) from t union select cast(d as datetime) from t;",
+				Expected: []sql.Row{{time.Date(2026, time.August, 20, 0, 0, 0, 0, time.UTC)}},
 			},
 		},
 	},
