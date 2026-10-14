@@ -613,7 +613,8 @@ func FormatInvalidByteForError(bytesVal []byte) string {
 
 // ConvertToLongText converts |val|, the value of an expression of type |typ|, to LONGTEXT, as a function reads an
 // argument as a string. A DATE is its date alone, 'YYYY-MM-DD', as MySQL reads it: a DATE's value is a time.Time,
-// which LongText.Convert cannot tell from a DATETIME's and renders with a time of day.
+// which LongText.Convert cannot tell from a DATETIME's and renders with a time of day. A TIME has as many fractional
+// digits as its precision.
 func ConvertToLongText(ctx context.Context, val interface{}, typ sql.Type) (interface{}, sql.ConvertInRange, error) {
 	val, err := dateAsText(val, typ)
 	if err != nil {
@@ -623,7 +624,7 @@ func ConvertToLongText(ctx context.Context, val interface{}, typ sql.Type) (inte
 }
 
 // ConvertToLongBlob converts |val|, the value of an expression of type |typ|, to LONGBLOB, as a function reads an
-// argument as bytes. A DATE is the bytes of its date alone, as in ConvertToLongText.
+// argument as bytes. A DATE or a TIME is the bytes of its text, as in ConvertToLongText.
 func ConvertToLongBlob(ctx context.Context, val interface{}, typ sql.Type) (interface{}, sql.ConvertInRange, error) {
 	val, err := dateAsText(val, typ)
 	if err != nil {
@@ -632,13 +633,27 @@ func ConvertToLongBlob(ctx context.Context, val interface{}, typ sql.Type) (inte
 	return LongBlob.Convert(ctx, val)
 }
 
-// dateAsText returns a DATE's value, a time.Time, as its date alone, and any other value as it is. A DATE-typed
-// expression does not always yield a time.Time (a string function may declare its argument's type as its own), so a
-// non-time value passes through rather than failing as it would in TypeAwareConversion. DATETIME and TIMESTAMP are
-// left to LongText.Convert: their declared precision is not reliable enough to pad fractional seconds by it.
+// dateAsText returns a DATE's value, a time.Time, as its date alone, a TIME's as timeAsText renders it, and any other
+// value as it is. A DATE-typed expression does not always yield a time.Time (a string function may declare its
+// argument's type as its own), so a non-time value passes through rather than failing as it would in
+// TypeAwareConversion. DATETIME and TIMESTAMP are left to LongText.Convert: their declared precision is not reliable
+// enough to pad fractional seconds by it.
 func dateAsText(val interface{}, typ sql.Type) (interface{}, error) {
 	if t, ok := val.(time.Time); ok && IsDateType(typ) {
 		return typ.(sql.DatetimeType).ToString(t)
+	}
+	return timeAsText(val, typ)
+}
+
+// timeAsText returns a TIME's value, a Timespan, as text with as many fractional digits as its type's precision, as
+// MySQL renders it ('13:45:10' for a TIME, '13:45:10.123' for a TIME(3)), and any other value as it is. LongText.Convert
+// cannot see the type and always renders six digits. A TIME-typed expression does not always yield a Timespan
+// (CURTIME() yields a string), so a value of another kind passes through.
+func timeAsText(val interface{}, typ sql.Type) (interface{}, error) {
+	if ts, ok := val.(Timespan); ok {
+		if timeType, ok := typ.(TimeType); ok {
+			return timeType.ToString(ts)
+		}
 	}
 	return val, nil
 }
