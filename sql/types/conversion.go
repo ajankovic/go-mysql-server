@@ -672,7 +672,7 @@ func GeneralizeTypes(a, b sql.Type) sql.Type {
 	if svt, ok := a.(sql.SystemVariableType); ok {
 		a = svt.UnderlyingType()
 	}
-	if svt, ok := a.(sql.SystemVariableType); ok {
+	if svt, ok := b.(sql.SystemVariableType); ok {
 		b = svt.UnderlyingType()
 	}
 
