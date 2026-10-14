@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +26,8 @@ import (
 )
 
 func TestIf(t *testing.T) {
+	date := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	datetime := time.Date(2026, 3, 15, 6, 0, 0, 123400000, time.UTC)
 	testCases := []struct {
 		expr     sql.Expression
 		row      sql.Row
@@ -38,6 +41,9 @@ func TestIf(t *testing.T) {
 		{eq(lit(1, types.Int64), lit(0, types.Int64)), sql.Row{1, 2}, int64(2), types.Int64, types.Int64},
 		{eq(lit(nil, types.Int64), lit(1, types.Int64)), sql.Row{"a", "b"}, "b", types.Text, types.Text},
 		{eq(lit(1, types.Int64), lit(1, types.Int64)), sql.Row{nil, "b"}, nil, nil, types.Text},
+		{eq(lit(1, types.Int64), lit(1, types.Int64)), sql.Row{date, "b"}, "2026-08-20", types.Date, types.LongText},
+		{eq(lit(1, types.Int64), lit(0, types.Int64)), sql.Row{"a", date}, "2026-08-20", types.LongText, types.Date},
+		{eq(lit(1, types.Int64), lit(1, types.Int64)), sql.Row{datetime, "b"}, "2026-03-15 06:00:00.123400", types.DatetimeMaxPrecision, types.LongText},
 	}
 
 	for _, tc := range testCases {
