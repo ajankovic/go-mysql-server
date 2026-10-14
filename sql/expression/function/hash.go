@@ -67,7 +67,7 @@ func (f *MD5) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	val, _, err := types.LongBlob.Convert(ctx, arg)
+	val, _, err := types.ConvertToLongBlob(ctx, arg, f.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (f *SHA1) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	val, _, err := types.LongBlob.Convert(ctx, arg)
+	val, _, err := types.ConvertToLongBlob(ctx, arg, f.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +188,7 @@ func (f *SHA2) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	val, _, err := types.LongBlob.Convert(ctx, arg)
+	val, _, err := types.ConvertToLongBlob(ctx, arg, f.LeftChild.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +284,7 @@ func (f *Compress) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	val, _, err := types.LongBlob.Convert(ctx, arg)
+	val, _, err := types.ConvertToLongBlob(ctx, arg, f.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

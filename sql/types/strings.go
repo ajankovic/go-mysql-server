@@ -611,9 +611,41 @@ func FormatInvalidByteForError(bytesVal []byte) string {
 	return result.String()
 }
 
-// convertToLongTextString safely converts a value to string using LongText.Convert with nil checking
-func convertToLongTextString(ctx context.Context, val interface{}) (string, error) {
-	converted, _, err := LongText.Convert(ctx, val)
+// ConvertToLongText converts |val|, the value of an expression of type |typ|, to LONGTEXT, as a function reads an
+// argument as a string. A DATE is its date alone, 'YYYY-MM-DD', as MySQL reads it: a DATE's value is a time.Time,
+// which LongText.Convert cannot tell from a DATETIME's and renders with a time of day.
+func ConvertToLongText(ctx context.Context, val interface{}, typ sql.Type) (interface{}, sql.ConvertInRange, error) {
+	val, err := dateAsText(val, typ)
+	if err != nil {
+		return nil, sql.InRange, err
+	}
+	return LongText.Convert(ctx, val)
+}
+
+// ConvertToLongBlob converts |val|, the value of an expression of type |typ|, to LONGBLOB, as a function reads an
+// argument as bytes. A DATE is the bytes of its date alone, as in ConvertToLongText.
+func ConvertToLongBlob(ctx context.Context, val interface{}, typ sql.Type) (interface{}, sql.ConvertInRange, error) {
+	val, err := dateAsText(val, typ)
+	if err != nil {
+		return nil, sql.InRange, err
+	}
+	return LongBlob.Convert(ctx, val)
+}
+
+// dateAsText returns a DATE's value, a time.Time, as its date alone, and any other value as it is. A DATE-typed
+// expression does not always yield a time.Time (a string function may declare its argument's type as its own), so a
+// non-time value passes through rather than failing as it would in TypeAwareConversion. DATETIME and TIMESTAMP are
+// left to LongText.Convert: their declared precision is not reliable enough to pad fractional seconds by it.
+func dateAsText(val interface{}, typ sql.Type) (interface{}, error) {
+	if t, ok := val.(time.Time); ok && IsDateType(typ) {
+		return typ.(sql.DatetimeType).ToString(t)
+	}
+	return val, nil
+}
+
+// convertToLongTextString safely converts a value of type |typ| to string using ConvertToLongText with nil checking
+func convertToLongTextString(ctx context.Context, val interface{}, typ sql.Type) (string, error) {
+	converted, _, err := ConvertToLongText(ctx, val, typ)
 	if err != nil {
 		return "", err
 	}
@@ -631,7 +663,7 @@ func convertEnumToString(ctx context.Context, val interface{}, enumType EnumType
 		}
 		return "", nil
 	}
-	return convertToLongTextString(ctx, val)
+	return convertToLongTextString(ctx, val, enumType)
 }
 
 // convertSetToString converts a set value to its string representation
@@ -639,7 +671,7 @@ func convertSetToString(ctx context.Context, val interface{}, setType SetType) (
 	if setVal, ok := val.(uint64); ok {
 		return setType.BitsToString(setVal)
 	}
-	return convertToLongTextString(ctx, val)
+	return convertToLongTextString(ctx, val, setType)
 }
 
 // ConvertToCollatedString returns the given interface as a string, along with its collation. If the Type possess a
@@ -675,7 +707,7 @@ func ConvertToCollatedString(ctx context.Context, val interface{}, typ sql.Type)
 					return "", sql.Collation_Unspecified, err
 				}
 			default:
-				content, err = convertToLongTextString(ctx, val)
+				content, err = convertToLongTextString(ctx, val, typ)
 				if err != nil {
 					return "", sql.Collation_Unspecified, err
 				}
@@ -683,7 +715,7 @@ func ConvertToCollatedString(ctx context.Context, val interface{}, typ sql.Type)
 		}
 	} else {
 		collation = sql.Collation_Default
-		content, err = convertToLongTextString(ctx, val)
+		content, err = convertToLongTextString(ctx, val, typ)
 		if err != nil {
 			return "", sql.Collation_Unspecified, err
 		}

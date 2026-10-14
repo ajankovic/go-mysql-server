@@ -64,26 +64,6 @@ func subSecondPrecision(t time.Time, precision int) string {
 	return s[:precision+1]
 }
 
-// fractionOfSecString returns the fractional seconds of |t| in microseconds, including the leading decimal point and with trailing zeros removed.
-func fractionOfSecString(t time.Time) string {
-	s := fmt.Sprintf("%09d", t.Nanosecond())
-	s = s[:6]
-
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] != '0' {
-			break
-		}
-
-		s = s[:i]
-	}
-
-	if len(s) == 0 {
-		return ""
-	}
-
-	return "." + s
-}
-
 // FunctionName implements sql.FunctionExpression
 func (n *Now) FunctionName() string {
 	return "now"

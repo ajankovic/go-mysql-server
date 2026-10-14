@@ -122,7 +122,7 @@ func (i *Insert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Convert all arguments to their expected types
-	strVal, _, err := types.LongText.Convert(ctx, str)
+	strVal, _, err := types.ConvertToLongText(ctx, str, i.str.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (i *Insert) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	newStrVal, _, err := types.LongText.Convert(ctx, newStr)
+	newStrVal, _, err := types.ConvertToLongText(ctx, newStr, i.newStr.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

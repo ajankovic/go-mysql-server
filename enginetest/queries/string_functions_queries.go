@@ -529,6 +529,84 @@ var StringFunctionsScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		// A DATE converts to text as 'YYYY-MM-DD', with no time of day, in
+		// the functions that read their argument as a string. A DATETIME
+		// keeps its time. The expected values are MySQL 8.0's.
+		Name:    "date renders as text without a time",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (i int primary key, d date, dt datetime);",
+			"insert into t values (1, '2026-08-20', '2026-08-20 00:00:00');",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select concat(d, 'x'), length(d), char_length(d), lower(d), upper(d) from t;",
+				Expected: []sql.Row{{"2026-08-20x", 10, 10, "2026-08-20", "2026-08-20"}},
+			},
+			{
+				Query:    "select replace(d, '-', '/'), concat_ws('|', d, 'x'), d like '%00:00%', d like '2026-08-20' from t;",
+				Expected: []sql.Row{{"2026/08/20", "2026-08-20|x", false, true}},
+			},
+			{
+				Query:    "select substring(d, 1, 7), substring(d, 9), mid(d, 6, 2), substring_index(d, '-', 2), trim(d), ltrim(d), rtrim(d) from t;",
+				Expected: []sql.Row{{"2026-08", "20", "08", "2026-08", "2026-08-20", "2026-08-20", "2026-08-20"}},
+			},
+			{
+				Query:    "select locate('00:', d), position('20' in d), reverse(d), repeat(d, 2), insert(d, 1, 4, 'yyyy'), lpad(d, 12, '*'), rpad(d, 12, '*') from t;",
+				Expected: []sql.Row{{0, 1, "02-80-6202", "2026-08-202026-08-20", "yyyy-08-20", "**2026-08-20", "2026-08-20**"}},
+			},
+			{
+				Query:    "select regexp_like(d, '00:00'), regexp_replace(d, '-', '/'), regexp_substr(d, '[0-9]+$'), regexp_instr(d, '20$'), d regexp ':' from t;",
+				Expected: []sql.Row{{0, "2026/08/20", "20", 9, 0}},
+			},
+			{
+				Query:    "select '2026-08-20' regexp d, regexp_replace('x2026-08-20x', d, 'D'), substring_index('a2026-08-20b2026-08-20c', d, 2) from t;",
+				Expected: []sql.Row{{1, "xDx", "a2026-08-20b"}},
+			},
+			{
+				Query:    "select find_in_set(d, '2026-08-20,x'), field(d, 'x', '2026-08-20'), elt(1, d), make_set(1, d), export_set(1, d, 'n', ',', 2), strcmp(d, '2026-08-20') from t;",
+				Expected: []sql.Row{{1, 2, "2026-08-20", "2026-08-20", "2026-08-20,n", 0}},
+			},
+			{
+				Query:    "select bit_length(d), octet_length(d) from t;",
+				Expected: []sql.Row{{80, 10}},
+			},
+			{
+				Query:    "select hex(d), hex(dt), md5(d), sha1(d), sha2(d, 256), md5(dt) from t;",
+				Expected: []sql.Row{{"323032362D30382D3230", "323032362D30382D32302030303A30303A3030", "d8540df3cf540dbcb561d4625cd7abb9", "4927e122b5640a04a9d06bbdb08c74c3c4d304d0", "414302dbf5eaf5ea08ff10ca75f88d4043b969d4a4c6d4cf61be9c503f272ea5", "cbde97add20bd20462358a499635d257"}},
+			},
+			{
+				Query:    "select to_base64(d), quote(d), quote(dt), uncompress(compress(d)), uncompressed_length(compress(d)) from t;",
+				Expected: []sql.Row{{"MjAyNi0wOC0yMA==", "'2026-08-20'", "'2026-08-20 00:00:00'", []byte("2026-08-20"), uint32(10)}},
+			},
+			{
+				// QUOTE, ELT and FIELD read their arguments as LONGBLOB or LONGTEXT, so they take values over 64 KB.
+				Query:    "select length(quote(repeat('a', 70000))), length(elt(1, repeat('a', 70000))), field(repeat('a', 70000), 'b', repeat('a', 70000));",
+				Expected: []sql.Row{{70002, 70000, 2}},
+			},
+			{
+				Query:    "select group_concat(d), max(concat(d, '')) from t;",
+				Expected: []sql.Row{{"2026-08-20", "2026-08-20"}},
+			},
+			{
+				Query:    "select concat(date(dt), 'x'), length(date(dt)), concat(date_add(d, interval 1 day), 'x'), concat(date_sub(d, interval 1 month), 'x'), concat(makedate(2026, 232), 'x'), concat(date_add(d, interval 1 hour), 'x') from t;",
+				Expected: []sql.Row{{"2026-08-20x", 10, "2026-08-21x", "2026-07-20x", "2026-08-20x", "2026-08-20 01:00:00x"}},
+			},
+			{
+				Query:    "select concat(dt, 'x'), length(dt), replace(dt, ' ', 'T'), concat(timestamp(d), 'x'), concat(cast(d as char), 'x'), concat(date('2026-08-20'), 'x'), concat(from_days(740000), 'x'), concat(last_day(d), 'x') from t;",
+				Expected: []sql.Row{{"2026-08-20 00:00:00x", 19, "2026-08-20T00:00:00", "2026-08-20 00:00:00x", "2026-08-20x", "2026-08-20x", "2026-01-19x", "2026-08-31x"}},
+			},
+			{
+				Query:    "select concat(cast('2026-08-20' as date), 'x'), concat(str_to_date('20/08/2026', '%d/%m/%Y'), 'x'), concat(coalesce(d, dt), 'x'), concat(ifnull(d, d), 'x') from t;",
+				Expected: []sql.Row{{"2026-08-20x", "2026-08-20x", "2026-08-20 00:00:00x", "2026-08-20x"}},
+			},
+			{
+				Query:    "select concat(d, 'x') from t where concat(d, '') = '2026-08-20';",
+				Expected: []sql.Row{{"2026-08-20x"}},
+			},
+		},
+	},
 }
 
 var BrokenRegexScriptTests = []ScriptTest{

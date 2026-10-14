@@ -104,7 +104,7 @@ func (l *Locate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	substrVal, _, err = types.LongText.Convert(ctx, substrVal)
+	substrVal, _, err = types.ConvertToLongText(ctx, substrVal, l.ChildExpressions[0].Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (l *Locate) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	strVal, _, err = types.LongText.Convert(ctx, strVal)
+	strVal, _, err = types.ConvertToLongText(ctx, strVal, l.ChildExpressions[1].Type(ctx))
 	if err != nil {
 		return nil, err
 	}
