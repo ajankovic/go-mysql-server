@@ -15,7 +15,6 @@
 package function
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/dolthub/vitess/go/mysql"
@@ -137,21 +136,7 @@ var (
 	})
 )
 
-// SessionTimeZone returns a MySQL timezone offset string for the value of @@session_time_zone. If the session
-// timezone is set to SYSTEM, then the system timezone offset is calculated and returned.
+// SessionTimeZone returns the session's @@time_zone, as [sql.SessionTimeZone] does.
 func SessionTimeZone(ctx *sql.Context) (string, error) {
-	sessionTimeZoneVar, err := ctx.GetSessionVariable(ctx, "time_zone")
-	if err != nil {
-		return "", err
-	}
-
-	sessionTimeZone, ok := sessionTimeZoneVar.(string)
-	if !ok {
-		return "", fmt.Errorf("invalid type for @@session.time_zone: %T", sessionTimeZoneVar)
-	}
-
-	if sessionTimeZone == "SYSTEM" {
-		sessionTimeZone = sql.SystemTimezoneOffset()
-	}
-	return sessionTimeZone, nil
+	return sql.SessionTimeZone(ctx)
 }
