@@ -354,4 +354,14 @@ var ExpressionsScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		Name:    "IF, IFNULL and CASE read a system variable's type in either argument",
+		Dialect: "mysql",
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select if(false, 1, @@max_join_size), case when false then 1 else @@max_join_size end, if(true, @@max_join_size, 1);",
+				Expected: []sql.Row{{"18446744073709551615", "18446744073709551615", "18446744073709551615"}},
+			},
+		},
+	},
 }
