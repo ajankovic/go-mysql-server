@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/apd/v3"
+	"github.com/dolthub/vitess/go/mysql"
 	"gopkg.in/src-d/go-errors.v1"
 
 	"github.com/dolthub/go-mysql-server/sql"
@@ -97,9 +98,12 @@ func compEval(
 		cmp = greaterThan
 	}
 
+	if types.IsTime(returnType) {
+		return compTemporalEval(ctx, returnType, args, row, cmp)
+	}
+
 	var selectedNum float64
 	var selectedString string
-	var selectedTime time.Time
 
 	for i, arg := range args {
 		val, err := arg.Eval(ctx, row)
@@ -170,10 +174,9 @@ func compEval(
 				selectedNum = fval
 			}
 		case time.Time:
-			// Since we deviate from MySQL with int -> time handling, we only set the selectedTime variable
-			if i == 0 || cmp(t, selectedTime) {
-				selectedTime = t
-			}
+			// A time from an expression not typed as one, compared as a number or
+			// a string, is skipped.
+			continue
 		case *apd.Decimal:
 			fval, _ := t.Float64()
 			if i == 0 || cmp(fval, selectedNum) {
@@ -187,10 +190,6 @@ func compEval(
 
 	}
 
-	if types.IsDatetimeType(returnType) {
-		return selectedTime, nil
-	}
-
 	switch returnType {
 	case types.Int64:
 		return int64(selectedNum), nil
@@ -202,6 +201,54 @@ func compEval(
 	return float64(selectedNum), nil
 }
 
+// compTemporalEval implements Greatest/Least Eval() when the arguments compare as
+// times. Each value is converted to returnType, so a string or a number compares
+// as the time it names. As in MySQL, a value that names no time is left out of the
+// comparison with a warning.
+func compTemporalEval(
+	ctx *sql.Context,
+	returnType sql.Type,
+	args []sql.Expression,
+	row sql.Row,
+	cmp func(a, b interface{}) bool,
+) (interface{}, error) {
+	var selected time.Time
+	selectedAny := false
+	for _, arg := range args {
+		val, err := arg.Eval(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+
+		if val == nil {
+			return nil, nil
+		}
+
+		converted, _, err := returnType.Convert(ctx, val)
+		if err != nil {
+			if !sql.ErrTruncatedIncorrect.Is(err) && !sql.ErrIncorrectValue.Is(err) {
+				return nil, err
+			}
+			ctx.Warn(mysql.ERTruncatedWrongValue, "%s", err.Error())
+		}
+
+		t, ok := converted.(time.Time)
+		if !ok {
+			continue
+		}
+
+		if !selectedAny || cmp(t, selected) {
+			selected = t
+			selectedAny = true
+		}
+	}
+
+	if !selectedAny {
+		return nil, nil
+	}
+	return selected, nil
+}
+
 // compRetType is used to determine the type from args based on the rules described for
 // Greatest/Least
 func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
@@ -211,7 +258,9 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 
 	allString := true
 	allInt := true
-	allDatetime := true
+	allTime := true
+	// timeType is the type the temporal arguments merge to, nil when there are none
+	var timeType sql.Type
 	anyDecimal := false
 	anyFloat := false
 	var argTypes []sql.Type
@@ -226,11 +275,17 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 			argType = svt.UnderlyingType()
 		}
 
+		// TIMESTAMP() declares its argument's type but evaluates to a DATETIME.
+		// This stands in until DatetimeConversion.Type answers DATETIME itself.
+		if _, ok := arg.(*DatetimeConversion); ok {
+			argType = types.DatetimeMaxPrecision
+		}
+
 		if types.IsTuple(argType) {
 			return nil, sql.ErrInvalidType.New("tuple")
 		} else if types.IsNumber(argType) {
 			allString = false
-			allDatetime = false
+			allTime = false
 			if !types.IsInteger(argType) {
 				allInt = false
 			}
@@ -246,10 +301,15 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 			argTypes = append(argTypes, argType)
 		} else if types.IsText(argType) {
 			allInt = false
-			allDatetime = false
+			allTime = false
 		} else if types.IsTime(argType) {
 			allString = false
 			allInt = false
+			if timeType == nil {
+				timeType = argType
+			} else {
+				timeType = types.GeneralizeTypes(timeType, argType)
+			}
 		} else if types.IsDeferredType(argType) {
 			return argType, nil
 		} else if argType == types.Null {
@@ -264,7 +324,15 @@ func compRetType(ctx *sql.Context, args ...sql.Expression) (sql.Type, error) {
 		return types.LongText, nil
 	} else if allInt {
 		return types.Int64, nil
-	} else if allDatetime {
+	} else if timeType != nil {
+		// MySQL compares every argument as a time when any one is a time, in the
+		// type the time arguments merge to. With text or numbers present only a
+		// DATE merge is kept; otherwise they are read as a DATETIME, which keeps
+		// their fractional seconds and, unlike a TIMESTAMP, accepts a time
+		// outside 1970-2038.
+		if allTime || types.IsDateType(timeType) {
+			return timeType, nil
+		}
 		return types.DatetimeMaxPrecision, nil
 	} else if anyDecimal && !anyFloat && len(argTypes) == len(args) {
 		// only numeric arguments, at least one an exact decimal: the result
