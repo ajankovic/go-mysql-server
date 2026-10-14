@@ -59,7 +59,7 @@ func (r *Reverse) Eval(
 		return nil, err
 	}
 
-	v, _, err = types.LongText.Convert(ctx, v)
+	v, _, err = types.ConvertToLongText(ctx, v, r.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (r *Repeat) Eval(
 		return nil, err
 	}
 
-	str, _, err = types.LongText.Convert(ctx, str)
+	str, _, err = types.ConvertToLongText(ctx, str, r.LeftChild.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +263,7 @@ func (r *Replace) Eval(
 		return nil, err
 	}
 
-	str, _, err = types.LongText.Convert(ctx, str)
+	str, _, err = types.ConvertToLongText(ctx, str, r.str.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,7 @@ func (r *Replace) Eval(
 		return nil, err
 	}
 
-	fromStr, _, err = types.LongText.Convert(ctx, fromStr)
+	fromStr, _, err = types.ConvertToLongText(ctx, fromStr, r.fromStr.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (r *Replace) Eval(
 		return nil, err
 	}
 
-	toStr, _, err = types.LongText.Convert(ctx, toStr)
+	toStr, _, err = types.ConvertToLongText(ctx, toStr, r.toStr.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

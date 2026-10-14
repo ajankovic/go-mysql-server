@@ -71,7 +71,7 @@ func (t *Trim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Convert pat into string and unwrap automatically
-	pat, _, err = types.LongText.Convert(ctx, pat)
+	pat, _, err = types.ConvertToLongText(ctx, pat, t.pat.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (t *Trim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	}
 
 	// Convert str to text type and unwrap automatically
-	str, _, err = types.LongText.Convert(ctx, str)
+	str, _, err = types.ConvertToLongText(ctx, str, t.str.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (t *LeftTrim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	str, _, err = types.LongText.Convert(ctx, str)
+	str, _, err = types.ConvertToLongText(ctx, str, t.Child.Type(ctx))
 	if err != nil {
 		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str))
 	}
@@ -291,7 +291,7 @@ func (t *RightTrim) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, nil
 	}
 
-	str, _, err = types.LongText.Convert(ctx, str)
+	str, _, err = types.ConvertToLongText(ctx, str, t.Child.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

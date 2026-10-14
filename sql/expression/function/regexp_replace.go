@@ -214,7 +214,7 @@ func (r *RegexpReplace) Eval(ctx *sql.Context, row sql.Row) (val interface{}, er
 	if text == nil {
 		return nil, nil
 	}
-	text, _, err = types.LongText.Convert(ctx, text)
+	text, _, err = types.ConvertToLongText(ctx, text, r.Text.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func (r *RegexpReplace) Eval(ctx *sql.Context, row sql.Row) (val interface{}, er
 	if rText == nil {
 		return nil, nil
 	}
-	rText, _, err = types.LongText.Convert(ctx, rText)
+	rText, _, err = types.ConvertToLongText(ctx, rText, r.RText.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

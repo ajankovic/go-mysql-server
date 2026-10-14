@@ -209,7 +209,7 @@ func (r *RegexpInstr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 	if text == nil {
 		return nil, nil
 	}
-	text, _, err = types.LongText.Convert(ctx, text)
+	text, _, err = types.ConvertToLongText(ctx, text, r.Text.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

@@ -109,7 +109,7 @@ func (f *ConcatWithSeparator) Eval(ctx *sql.Context, row sql.Row) (interface{}, 
 			continue
 		}
 
-		val, _, err = types.LongText.Convert(ctx, val)
+		val, _, err = types.ConvertToLongText(ctx, val, arg.Type(ctx))
 		if err != nil {
 			return nil, err
 		}

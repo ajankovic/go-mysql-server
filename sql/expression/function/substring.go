@@ -85,7 +85,7 @@ func (s *Substring) Eval(
 		return nil, err
 	}
 
-	str, _, err = types.LongText.Convert(ctx, str)
+	str, _, err = types.ConvertToLongText(ctx, str, s.Str.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 	if ex == nil || err != nil {
 		return nil, err
 	}
-	ex, _, err = types.LongText.Convert(ctx, ex)
+	ex, _, err = types.ConvertToLongText(ctx, ex, s.str.Type(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +251,7 @@ func (s *SubstringIndex) Eval(ctx *sql.Context, row sql.Row) (interface{}, error
 	if ex == nil || err != nil {
 		return nil, err
 	}
-	ex, _, err = types.LongText.Convert(ctx, ex)
+	ex, _, err = types.ConvertToLongText(ctx, ex, s.delim.Type(ctx))
 	if err != nil {
 		return nil, err
 	}

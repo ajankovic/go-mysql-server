@@ -110,7 +110,7 @@ func (e *Elt) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	res, _, err := types.Text.Convert(ctx, str)
+	res, _, err := types.ConvertToLongText(ctx, str, e.args[idx].Type(ctx))
 	if err != nil {
 		return nil, err
 	}
