@@ -225,3 +225,25 @@ func TestTimeZero(t *testing.T) {
 	_, ok := Time.Zero().(Timespan)
 	require.True(t, ok)
 }
+
+func TestTimespanRound(t *testing.T) {
+	tests := []struct {
+		val       Timespan
+		precision int
+		expected  Timespan
+	}{
+		{unitsToTimespan(false, 13, 45, 10, 123456), 0, unitsToTimespan(false, 13, 45, 10, 0)},
+		{unitsToTimespan(false, 13, 45, 10, 500000), 0, unitsToTimespan(false, 13, 45, 11, 0)},
+		{unitsToTimespan(true, 0, 0, 0, 500000), 0, unitsToTimespan(true, 0, 0, 1, 0)},
+		{unitsToTimespan(false, 13, 45, 10, 123456), 3, unitsToTimespan(false, 13, 45, 10, 123000)},
+		{unitsToTimespan(false, 0, 0, 0, 500), 3, unitsToTimespan(false, 0, 0, 0, 1000)},
+		{unitsToTimespan(true, 1, 2, 3, 999999), 3, unitsToTimespan(true, 1, 2, 4, 0)},
+		{unitsToTimespan(true, 838, 59, 58, 999999), 0, unitsToTimespan(true, 838, 59, 59, 0)},
+		{unitsToTimespan(true, 1, 2, 3, 999999), 6, unitsToTimespan(true, 1, 2, 3, 999999)},
+	}
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("%v to %d", test.val, test.precision), func(t *testing.T) {
+			assert.Equal(t, test.expected, test.val.Round(test.precision))
+		})
+	}
+}
