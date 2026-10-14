@@ -1075,4 +1075,35 @@ var ConversionsScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		// A cast between TIME types of different precision rounds to the new precision, half away from zero, and is
+		// typed with it.
+		Name:    "cast between time precisions",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"CREATE TABLE t (id INT PRIMARY KEY, t0 TIME, t3 TIME(3), t6 TIME(6));",
+			"INSERT INTO t VALUES (1, '13:45:10', '13:45:10.123', '13:45:10.123456'), (2, '-01:02:03', '-01:02:03.5', '-01:02:03.999999');",
+			"CREATE TABLE c AS SELECT CAST(t0 AS TIME(3)) a, CAST(t3 AS TIME(6)) b, CAST(t3 AS TIME) c, CAST(t6 AS TIME(3)) d, CONVERT(t6, TIME) e, CAST(t3 AS TIME(3)) f FROM t;",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query: "SELECT CAST(t3 AS TIME), CAST(t6 AS TIME), CAST(t6 AS TIME(3)), CONVERT(t6, TIME(3)) FROM t ORDER BY id;",
+				Expected: []sql.Row{
+					{types.Timespan(49510_000000), types.Timespan(49510_000000), types.Timespan(49510_123000), types.Timespan(49510_123000)},
+					{types.Timespan(-3724_000000), types.Timespan(-3724_000000), types.Timespan(-3724_000000), types.Timespan(-3724_000000)},
+				},
+			},
+			{
+				Query:    "SELECT column_name, column_type FROM information_schema.columns WHERE table_name = 'c' ORDER BY ordinal_position;",
+				Expected: []sql.Row{{"a", "time(3)"}, {"b", "time(6)"}, {"c", "time"}, {"d", "time(3)"}, {"e", "time"}, {"f", "time(3)"}},
+			},
+			{
+				Query: "SELECT a, b, d FROM c ORDER BY b;",
+				Expected: []sql.Row{
+					{types.Timespan(-3723_000000), types.Timespan(-3723_500000), types.Timespan(-3724_000000)},
+					{types.Timespan(49510_000000), types.Timespan(49510_123000), types.Timespan(49510_123000)},
+				},
+			},
+		},
+	},
 }
