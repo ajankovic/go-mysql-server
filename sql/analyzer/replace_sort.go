@@ -442,7 +442,7 @@ func replaceAgg(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope,
 
 		// find the aggregated column
 		var colIdx int
-		for colIdx = 0; colIdx <= len(pkCols); colIdx++ {
+		for colIdx = 0; colIdx < len(pkCols); colIdx++ {
 			if strings.EqualFold(pkCols[colIdx], sortBy.Expr.String()) {
 				break
 			}
@@ -450,6 +450,11 @@ func replaceAgg(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope,
 				// A non-constant column appears before the aggregated column in the index.
 				return n, transform.SameTree, nil
 			}
+		}
+		if colIdx == len(pkCols) {
+			// The aggregated column is not in the index, whose every column is constant, so the lookup reads at
+			// most one row and the index has no order to offer.
+			return n, transform.SameTree, nil
 		}
 		// replace all aggs in proj.Projections with GetField
 		name := gb.SelectDeps[0].String()
