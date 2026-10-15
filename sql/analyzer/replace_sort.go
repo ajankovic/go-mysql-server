@@ -337,7 +337,7 @@ func buildReverseIndexedTable(ctx *sql.Context, node sql.Node) (sql.Node, transf
 	})
 }
 
-// replaceAgg converts aggregate functions to order by + limit 1 when possible
+// replaceAgg makes MIN or MAX of a primary key column read only the first row of an ordered scan of the key, when possible
 func replaceAgg(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope, sel RuleSelector, qFlags *sql.QueryFlags) (sql.Node, transform.TreeIdentity, error) {
 	if !FlagIsSet(qFlags, sql.QFlagAggregation) {
 		return node, transform.SameTree, nil
@@ -456,24 +456,26 @@ func replaceAgg(ctx *sql.Context, a *Analyzer, node sql.Node, scope *plan.Scope,
 			// most one row and the index has no order to offer.
 			return n, transform.SameTree, nil
 		}
-		// replace all aggs in proj.Projections with GetField
-		name := gb.SelectDeps[0].String()
-		newProjs, _, err := transform.Exprs(ctx, proj.Projections, func(ctx *sql.Context, e sql.Expression) (sql.Expression, transform.TreeIdentity, error) {
-			if strings.EqualFold(e.String(), name) {
-				return sortBy.Expr, transform.NewTree, nil
-			}
-			return e, transform.SameTree, nil
-		})
+		// Aggregate over the first row in index order rather than replacing the aggregation with that row: over no rows
+		// MIN and MAX must still return one NULL row. replaceIdxSort does not look below a GroupBy, so the sort is
+		// turned into the index scan here.
+		sorted, _, err := replaceIdxSortHelper(ctx, scope, plan.NewSort(sql.SortConditions{sortBy}, gb.Child), nil)
 		if err != nil {
 			return nil, transform.SameTree, err
 		}
-
-		// TODO: The analyzer rule insertTopNNodes replaces Limit nodes wrapping a Sort into TopN nodes. This rule
-		//  wouldn't be applied here since it's a Limit wrapping a Project wrapping a Sort, but this node could likely
-		//  be rewritten here to instead be a TopN node.
-		newProj := plan.NewProject(ctx, newProjs, plan.NewSort(sql.SortConditions{sortBy}, gb.Child))
-		limit := plan.NewLimit(expression.NewLiteral(1, types.Int64), newProj)
-		return limit, transform.NewTree, nil
+		if _, ok := sorted.(*plan.Sort); ok {
+			// No index supplies the order; a plain aggregation is cheaper than sorting.
+			return n, transform.SameTree, nil
+		}
+		newGb, err := gb.WithChildren(ctx, plan.NewLimit(expression.NewLiteral(1, types.Int64), sorted))
+		if err != nil {
+			return nil, transform.SameTree, err
+		}
+		newProj, err := proj.WithChildren(ctx, newGb)
+		if err != nil {
+			return nil, transform.SameTree, err
+		}
+		return newProj, transform.NewTree, nil
 	})
 }
 

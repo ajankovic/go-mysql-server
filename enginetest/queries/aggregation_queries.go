@@ -1134,8 +1134,8 @@ var AggregationScriptTests = []ScriptTest{
 		},
 	},
 	{
-		// MIN and MAX of a primary key column become a lookup on the key. Here the filter fixes every key
-		// column and the aggregated column is not part of the key.
+		// MIN and MAX of a primary key column read the first row of an ordered key scan. Here the filter fixes
+		// every key column and the aggregated column is not part of the key, so there is no order to use.
 		Name:    "min and max of a column outside a primary key fixed by the filter",
 		Dialect: "mysql",
 		SetUpScript: []string{
@@ -1164,6 +1164,71 @@ var AggregationScriptTests = []ScriptTest{
 			{
 				Query:    "select max(n) from t where id = 1 group by id;",
 				Expected: []sql.Row{{5}},
+			},
+		},
+	},
+	{
+		// MIN and MAX of a primary key column read the first row of a key lookup, and still answer one row
+		// when no row matches.
+		Name:    "min and max of a primary key over no rows",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (id int primary key, n int);",
+			"insert into t values (1, 5), (2, 7), (3, null);",
+			"create table u (a int, b int, n int, primary key (a, b));",
+			"insert into u values (1, 1, 5), (1, 2, 7), (2, 1, 3);",
+			"create table e (id int primary key);",
+			"create table d (a int, b int, primary key (a, b desc));",
+			"insert into d values (1, 1), (1, 9), (1, 4), (2, 7);",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select max(id) from t where id = 99;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select min(id) from t where id > 99;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select max(id) + 1 from t where id > 99;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select max(b) from u where a = 9;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select max(id) from e;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select min(id) from e;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select min(b) from u where a = 9 group by a;",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select max(id) from t;",
+				Expected: []sql.Row{{3}},
+			},
+			{
+				Query:    "select min(b) from u where a = 1;",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "select max(b) from d where a = 1;",
+				Expected: []sql.Row{{9}},
+			},
+			{
+				Query:    "select min(b) from d where a = 1;",
+				Expected: []sql.Row{{1}},
+			},
+			{
+				Query:    "select min(b) from d where a = 3;",
+				Expected: []sql.Row{{nil}},
 			},
 		},
 	},
