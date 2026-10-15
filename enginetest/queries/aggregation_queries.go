@@ -1133,6 +1133,40 @@ var AggregationScriptTests = []ScriptTest{
 			},
 		},
 	},
+	{
+		// MIN and MAX of a primary key column become a lookup on the key. Here the filter fixes every key
+		// column and the aggregated column is not part of the key.
+		Name:    "min and max of a column outside a primary key fixed by the filter",
+		Dialect: "mysql",
+		SetUpScript: []string{
+			"create table t (id int primary key, n int);",
+			"insert into t values (1, 5), (2, 7), (3, null);",
+			"create table u (a int, b int, n int, primary key (a, b));",
+			"insert into u values (1, 1, 5), (1, 2, 7), (2, 1, 3);",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select max(n) from t where id = 2;",
+				Expected: []sql.Row{{7}},
+			},
+			{
+				Query:    "select min(n) from t where id = 3;",
+				Expected: []sql.Row{{nil}},
+			},
+			{
+				Query:    "select max(n) from u where a = 1 and b = 2;",
+				Expected: []sql.Row{{7}},
+			},
+			{
+				Query:    "select min(n) from u where b = 1 and a = 2;",
+				Expected: []sql.Row{{3}},
+			},
+			{
+				Query:    "select max(n) from t where id = 1 group by id;",
+				Expected: []sql.Row{{5}},
+			},
+		},
+	},
 }
 
 var GroupByScriptTests = []ScriptTest{
