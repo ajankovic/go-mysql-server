@@ -504,3 +504,94 @@ func TestAvgAgg_NonNumericVarchar(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(5), res)
 }
+
+// TestSumAndAvgAggSumFramesInRowOrder checks every frame of a partition, in an order that extends frames, slides
+// them and moves them back, against the frame's non-NULL values added from its first row, as MySQL sums them.
+func TestSumAndAvgAggSumFramesInRowOrder(t *testing.T) {
+	vals := []interface{}{1e17, 1.5, nil, 2.25, 3.0, 2400000.17, -1999999.99, 812.33, -12.01, 600.1, nil}
+	buf := make([]sql.Row, 0, len(vals)+2)
+	buf = append(buf, sql.Row{7.0})
+	for _, v := range vals {
+		buf = append(buf, sql.Row{v})
+	}
+	buf = append(buf, sql.Row{7.0})
+	partition := sql.WindowInterval{Start: 1, End: len(vals) + 1}
+
+	var frames []sql.WindowInterval
+	for start := partition.Start; start <= partition.End; start++ {
+		for end := start; end <= partition.End; end++ {
+			frames = append(frames, sql.WindowInterval{Start: start, End: end})
+		}
+	}
+	for i := len(frames) - 1; i >= 0; i -= 3 {
+		frames = append(frames, frames[i])
+	}
+
+	ctx := sql.NewEmptyContext()
+	var evals int
+	expr := &windowCountingExpr{Expression: expression.NewGetField(0, types.Float64, "x", true), count: &evals}
+	sum, avg := NewSumAgg(expr), NewAvgAgg(expr)
+	require.NoError(t, sum.StartPartition(ctx, partition, buf))
+	require.NoError(t, avg.StartPartition(ctx, partition, buf))
+	for _, frame := range frames {
+		var want float64
+		var n int
+		for _, row := range buf[frame.Start:frame.End] {
+			if row[0] != nil {
+				want += row[0].(float64)
+				n++
+			}
+		}
+		gotSum, err := sum.Compute(ctx, frame, buf)
+		require.NoError(t, err)
+		gotAvg, err := avg.Compute(ctx, frame, buf)
+		require.NoError(t, err)
+		if n == 0 {
+			require.Nil(t, gotSum, "sum %v", frame)
+			require.Nil(t, gotAvg, "avg %v", frame)
+			continue
+		}
+		require.Equal(t, want, gotSum, "sum %v", frame)
+		require.Equal(t, want/float64(n), gotAvg, "avg %v", frame)
+	}
+	require.Equal(t, 2*len(vals), evals, "each value is evaluated once per partition")
+}
+
+// TestSumAggWithoutHighPrecision checks that windowing_use_high_precision off sums a frame as the difference of two
+// prefix sums, which loses the values that follow a large one.
+func TestSumAggWithoutHighPrecision(t *testing.T) {
+	buf := []sql.Row{{1e17}, {1.5}, {2.25}, {3.0}}
+	partition := sql.WindowInterval{Start: 0, End: len(buf)}
+	frame := sql.WindowInterval{Start: 1, End: 4}
+
+	ctx := sql.NewEmptyContext()
+	sum := NewSumAgg(expression.NewGetField(0, types.Float64, "x", true))
+	require.NoError(t, sum.StartPartition(ctx, partition, buf))
+	res, err := sum.Compute(ctx, frame, buf)
+	require.NoError(t, err)
+	require.Equal(t, 6.75, res)
+
+	require.NoError(t, ctx.SetSessionVariable(ctx, "windowing_use_high_precision", int8(0)))
+	require.NoError(t, sum.StartPartition(ctx, partition, buf))
+	res, err = sum.Compute(ctx, frame, buf)
+	require.NoError(t, err)
+	// 1e17 + 1.5 + 2.25 + 3 rounds to 1e17, so its difference with 1e17 is 0.
+	require.Equal(t, float64(0), res)
+}
+
+type windowEvalErrorExpr struct {
+	sql.Expression
+}
+
+func (e windowEvalErrorExpr) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
+	return nil, errors.New("eval failed")
+}
+
+func TestSumAndAvgAggReturnEvaluationErrors(t *testing.T) {
+	buf := []sql.Row{{1.0}, {2.0}}
+	partition := sql.WindowInterval{Start: 0, End: len(buf)}
+	expr := windowEvalErrorExpr{expression.NewGetField(0, types.Float64, "x", true)}
+	for _, agg := range []sql.WindowFunction{NewSumAgg(expr), NewAvgAgg(expr)} {
+		require.ErrorContains(t, agg.StartPartition(sql.NewEmptyContext(), partition, buf), "eval failed")
+	}
+}
