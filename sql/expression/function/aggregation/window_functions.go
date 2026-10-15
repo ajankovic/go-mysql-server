@@ -85,17 +85,11 @@ func (b *baseWindowFunction) DefaultFramer() sql.WindowFramer {
 
 type SumAgg struct {
 	baseWindowFunction
-	// use prefix sums to quickly calculate arbitrary frame sum within partition
-	prefixSum      []float64
-	nullCnt        []int
-	partitionStart int
-	partitionEnd   int
+	sums frameSum
 }
 
 func NewSumAgg(e sql.Expression) *SumAgg {
 	return &SumAgg{
-		partitionStart:     -1,
-		partitionEnd:       -1,
 		baseWindowFunction: newBaseWindowFunction(e),
 	}
 }
@@ -121,11 +115,8 @@ func (a *SumAgg) Dispose(ctx *sql.Context) {
 }
 
 func (a *SumAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
-	a.partitionStart, a.partitionEnd = interval.Start, interval.End
 	a.Dispose(ctx)
-	var err error
-	a.prefixSum, a.nullCnt, err = floatPrefixSum(ctx, interval, buf, a.expr)
-	return err
+	return a.sums.reset(ctx, interval, buf, a.expr)
 }
 
 func (a *SumAgg) NewSlidingFrameInterval(added, dropped sql.WindowInterval) {
@@ -133,20 +124,98 @@ func (a *SumAgg) NewSlidingFrameInterval(added, dropped sql.WindowInterval) {
 }
 
 func (a *SumAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	if interval.End-interval.Start < 1 {
-		return nil, nil
-	}
-	startIdx := interval.Start - a.partitionStart - 1
-	endIdx := interval.End - a.partitionStart - 1
-	nullCnt := a.nullCnt[endIdx]
-	if startIdx >= 0 {
-		nullCnt -= a.nullCnt[startIdx]
-	}
+	sum, n := a.sums.compute(interval)
 	// SUM returns NULL when the frame has no non-NULL values.
-	if nullCnt == interval.End-interval.Start {
+	if n == 0 {
 		return nil, nil
 	}
-	return computePrefixSum(interval, a.partitionStart, a.prefixSum), nil
+	return sum, nil
+}
+
+// frameSum sums a window's frames for SUM and AVG. With windowing_use_high_precision on, the default, a frame is
+// summed from its first row in row order, as MySQL sums it: a frame that keeps the last frame's start adds the rows
+// that entered it to the last sum, and any other frame is summed again from its start. That is linear for frames that
+// keep their start or have a bounded width, and quadratic in the partition size for a frame whose start moves while
+// its end stays far, such as ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING, as in MySQL. With the variable off, a
+// frame's sum is the difference of two prefix sums, constant time per frame but carrying the rounding of every value
+// before the frame, so that a large value early in the partition can leave no digits in the frames after it.
+type frameSum struct {
+	partitionStart int
+	// vals holds the partition's values, NULL and unconvertible values as 0, which adds nothing to a sum.
+	vals []float64
+	// nulls[i] is the number of NULL values among the partition's first i+1 rows.
+	nulls         []int
+	highPrecision bool
+	// prefix[i] is the sum of vals[0..i]; it is set only when highPrecision is off.
+	prefix []float64
+	// sum is the sum of the rows from start to end, as buffer indexes, when highPrecision is set.
+	start, end int
+	sum        float64
+}
+
+func (f *frameSum) reset(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer, e sql.Expression) error {
+	highPrecision, err := ctx.GetSessionVariable(ctx, "windowing_use_high_precision")
+	if err != nil {
+		return err
+	}
+	if f.highPrecision, err = sql.ConvertToBool(ctx, highPrecision); err != nil {
+		return err
+	}
+	n := interval.End - interval.Start
+	f.partitionStart = interval.Start
+	f.vals, f.nulls = make([]float64, n), make([]int, n)
+	f.prefix = nil
+	f.start, f.end, f.sum = interval.Start, interval.Start, 0
+	var nulls int
+	for i := range n {
+		v, err := e.Eval(ctx, buf[interval.Start+i])
+		if err != nil {
+			return err
+		}
+		if v == nil {
+			nulls++
+		} else if x, _, err := types.Float64.Convert(ctx, v); err == nil && x != nil {
+			f.vals[i] = x.(float64)
+		}
+		f.nulls[i] = nulls
+	}
+	if !f.highPrecision {
+		f.prefix = make([]float64, n)
+		var sum float64
+		for i, x := range f.vals {
+			sum += x
+			f.prefix[i] = sum
+		}
+	}
+	return nil
+}
+
+// compute returns the sum of the frame's values and how many of them are not NULL.
+func (f *frameSum) compute(interval sql.WindowInterval) (float64, int) {
+	if interval.End <= interval.Start {
+		return 0, 0
+	}
+	n := interval.End - interval.Start - (f.nullsBefore(interval.End) - f.nullsBefore(interval.Start))
+	if !f.highPrecision {
+		return computePrefixSum(interval, f.partitionStart, f.prefix), n
+	}
+	if interval.Start != f.start || interval.End < f.end {
+		f.start, f.end, f.sum = interval.Start, interval.Start, 0
+	}
+	sum := f.sum
+	for _, x := range f.vals[f.end-f.partitionStart : interval.End-f.partitionStart] {
+		sum += x
+	}
+	f.end, f.sum = interval.End, sum
+	return sum, n
+}
+
+// nullsBefore returns the number of NULL values in the partition before buffer index |i|.
+func (f *frameSum) nullsBefore(i int) int {
+	if i == f.partitionStart {
+		return 0
+	}
+	return f.nulls[i-f.partitionStart-1]
 }
 
 func floatPrefixSum(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer, e sql.Expression) ([]float64, []int, error) {
@@ -193,15 +262,7 @@ func computePrefixSum(interval sql.WindowInterval, partitionStart int, prefixSum
 
 type AvgAgg struct {
 	baseWindowFunction
-
-	// use prefix sums to quickly calculate arbitrary frame sum within partition
-	prefixSum []float64
-
-	// exclude nulls in average denominator
-	nullCnt []int
-
-	partitionStart int
-	partitionEnd   int
+	sums frameSum
 }
 
 func NewAvgAgg(e sql.Expression) *AvgAgg {
@@ -232,11 +293,7 @@ func (a *AvgAgg) Dispose(ctx *sql.Context) {
 
 func (a *AvgAgg) StartPartition(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) error {
 	a.Dispose(ctx)
-	a.partitionStart = interval.Start
-	a.partitionEnd = interval.End
-	var err error
-	a.prefixSum, a.nullCnt, err = floatPrefixSum(ctx, interval, buf, a.expr)
-	return err
+	return a.sums.reset(ctx, interval, buf, a.expr)
 }
 
 func (a *AvgAgg) NewSlidingFrameInterval(added, dropped sql.WindowInterval) {
@@ -244,23 +301,12 @@ func (a *AvgAgg) NewSlidingFrameInterval(added, dropped sql.WindowInterval) {
 }
 
 func (a *AvgAgg) Compute(ctx *sql.Context, interval sql.WindowInterval, buf sql.WindowBuffer) (interface{}, error) {
-	startIdx := interval.Start - a.partitionStart - 1
-	endIdx := interval.End - a.partitionStart - 1
-
-	var nonNullCnt int
-	if endIdx >= 0 {
-		nonNullCnt += endIdx + 1
-		nonNullCnt -= a.nullCnt[endIdx]
-	}
-	if startIdx >= 0 {
-		nonNullCnt -= startIdx + 1
-		nonNullCnt += a.nullCnt[startIdx]
-	}
+	sum, n := a.sums.compute(interval)
 	// AVG returns NULL when the frame has no non-NULL values.
-	if nonNullCnt == 0 {
+	if n == 0 {
 		return nil, nil
 	}
-	return computePrefixSum(interval, a.partitionStart, a.prefixSum) / float64(nonNullCnt), nil
+	return sum / float64(n), nil
 }
 
 type BitAndAgg struct {
