@@ -206,8 +206,25 @@ func (b *ExecBuilder) buildHashJoin(ctx *sql.Context, j *HashJoin, children ...s
 	filters := b.buildFilterConjunction(ctx, j.Filter...)
 
 	outer := plan.NewHashLookup(ctx, children[1], rightEntryKey, leftProbeKey, j.Op)
+	outer.NullRejecting = nullRejectingHashKeys(j)
 	inner := children[0]
 	return plan.NewJoin(ctx, inner, outer, j.Op, filters), nil
+}
+
+// nullRejectingHashKeys reports whether a NULL in any of j's hash keys means
+// the pair cannot join: every key is compared with = (not <=>), and the join
+// drops a pair whose condition is NULL rather than telling NULL apart from
+// false, as an anti join or a left join excluding nulls does.
+func nullRejectingHashKeys(j *HashJoin) bool {
+	if j.Op.IsExcludeNulls() || len(j.Filter) == 0 {
+		return false
+	}
+	for _, f := range j.Filter {
+		if _, ok := f.(*expression.Equals); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *ExecBuilder) buildIndexScan(ctx *sql.Context, i *IndexScan, children ...sql.Node) (sql.Node, error) {

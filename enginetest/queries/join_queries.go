@@ -1397,6 +1397,48 @@ var JoinScriptTests = []ScriptTest{
 		},
 	},
 	{
+		// A hash join on = leaves rows whose key is NULL out of its lookup and finds nothing for a NULL probe,
+		// since NULL = NULL is not true. A join on <=> still matches NULL with NULL, and NOT IN, which tells a
+		// NULL comparison apart from a false one, still sees the NULL.
+		Name: "HashLookup with NULL keys",
+		SetUpScript: []string{
+			"create table t1 (i int primary key, k int);",
+			"create table t2 (i int primary key, k int);",
+			"insert into t1 values (1, 1), (2, null), (3, null), (4, 2);",
+			"insert into t2 values (1, 1), (2, null), (3, null), (4, 3);",
+		},
+		Assertions: []ScriptTestAssertion{
+			{
+				Query:    "select /*+ HASH_JOIN(t1, t2) */ t1.i, t2.i from t1 join t2 on t1.k = t2.k order by 1, 2;",
+				Expected: []sql.Row{{1, 1}},
+			},
+			{
+				Query:    "select /*+ HASH_JOIN(a, b) */ count(*) from t1 a join t1 b on a.k = b.k;",
+				Expected: []sql.Row{{2}},
+			},
+			{
+				Query:    "select /*+ HASH_JOIN(t1, t2) */ t1.i, t2.i from t1 left join t2 on t1.k = t2.k order by 1, 2;",
+				Expected: []sql.Row{{1, 1}, {2, nil}, {3, nil}, {4, nil}},
+			},
+			{
+				Query:    "select /*+ HASH_JOIN(t1, t2) */ t1.i, t2.i from t1 join t2 on t1.k = t2.k and t1.i = t2.i order by 1, 2;",
+				Expected: []sql.Row{{1, 1}},
+			},
+			{
+				Query:    "select /*+ HASH_JOIN(t1, t2) */ t1.i, t2.i from t1 join t2 on t1.k <=> t2.k order by 1, 2;",
+				Expected: []sql.Row{{1, 1}, {2, 2}, {2, 3}, {3, 2}, {3, 3}},
+			},
+			{
+				Query:    "select i from t2 where k not in (select k from t1) order by 1;",
+				Expected: []sql.Row{},
+			},
+			{
+				Query:    "select i from t2 where k not in (select k from t1 where k is not null) order by 1;",
+				Expected: []sql.Row{{4}},
+			},
+		},
+	},
+	{
 		Name: "HashLookup on multiple columns with collations",
 		SetUpScript: []string{
 			"create table t1 (i int primary key, j varchar(128) collate utf8mb4_0900_ai_ci);",

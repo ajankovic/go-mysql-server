@@ -190,7 +190,15 @@ func (h *hashLookupGeneratingIter) Next(ctx *sql.Context) (sql.Row, error) {
 	if err != nil {
 		return nil, err
 	}
-	// TODO: Maybe do not put nil stuff in here.
+	if h.n.NullRejecting {
+		null, err := h.n.HasNullKey(ctx, h.n.RightEntryKey, childRow)
+		if err != nil {
+			return nil, err
+		}
+		if null {
+			return childRow, nil
+		}
+	}
 	// TODO: Handle keys that are out of range?
 	key, _, err := h.n.GetHashKey(ctx, h.n.RightEntryKey, childRow)
 	if err != nil {
