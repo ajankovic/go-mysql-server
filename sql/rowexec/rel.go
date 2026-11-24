@@ -238,6 +238,15 @@ func (b *BaseBuilder) buildHashLookup(ctx *sql.Context, n *plan.HashLookup, row 
 		}
 		return newHashLookupGeneratingIter(n, childIter), nil
 	}
+	if n.NullRejecting {
+		null, err := n.HasNullKey(ctx, n.LeftProbeKey, row)
+		if err != nil {
+			return nil, err
+		}
+		if null {
+			return sql.RowsToRowIter(), nil
+		}
+	}
 	// TODO: handle out of range keys?
 	key, _, err := n.GetHashKey(ctx, n.LeftProbeKey, row)
 	if err != nil {
