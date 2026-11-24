@@ -61,6 +61,11 @@ type HashLookup struct {
 	Lookup        *map[interface{}][]sql.Row
 	leftKeySch    sql.Schema
 	JoinType      JoinType
+	// NullRejecting is set when every key is compared with = and the join
+	// drops a pair whose condition is NULL. A key holding NULL then matches
+	// no row, so rows with such a key are left out of the lookup and a probe
+	// by such a key finds nothing, rather than every row whose key is NULL.
+	NullRejecting bool
 }
 
 var _ sql.Node = (*HashLookup)(nil)
@@ -165,6 +170,26 @@ func (n *HashLookup) GetHashKey(ctx *sql.Context, e sql.Expression, row sql.Row)
 		return string(k), sql.InRange, nil
 	}
 	return hash.HashOfSimple(ctx, key, n.CompareType)
+}
+
+// HasNullKey reports whether e, a key of this lookup, holds a NULL for row:
+// is NULL, or is a tuple with a NULL element.
+func (n *HashLookup) HasNullKey(ctx *sql.Context, e sql.Expression, row sql.Row) (bool, error) {
+	key, err := e.Eval(ctx, row)
+	if err != nil {
+		return false, err
+	}
+	if key == nil {
+		return true, nil
+	}
+	if s, ok := key.([]any); ok {
+		for _, v := range s {
+			if v == nil {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (n *HashLookup) Dispose(ctx *sql.Context) {
