@@ -524,43 +524,31 @@ order by
 			"     └─ GroupBy\n" +
 			"         ├─ select: COUNT(1 (bigint)), orders.o_orderpriority:5!null\n" +
 			"         ├─ group: orders.o_orderpriority:5!null\n" +
-			"         └─ Project\n" +
-			"             ├─ columns: [orders.O_ORDERKEY:0!null, orders.O_CUSTKEY:1!null, orders.O_ORDERSTATUS:2!null, orders.O_TOTALPRICE:3!null, orders.O_ORDERDATE:4!null, orders.O_ORDERPRIORITY:5!null, orders.O_CLERK:6!null, orders.O_SHIPPRIORITY:7!null, orders.O_COMMENT:8!null]\n" +
-			"             └─ MergeJoin\n" +
-			"                 ├─ cmp: Eq\n" +
-			"                 │   ├─ orders.o_orderkey:0!null\n" +
-			"                 │   └─ lineitem.l_orderkey:9!null\n" +
-			"                 ├─ Filter\n" +
-			"                 │   ├─ AND\n" +
-			"                 │   │   ├─ GreaterThanOrEqual\n" +
-			"                 │   │   │   ├─ orders.o_orderdate:4!null\n" +
-			"                 │   │   │   └─ 1993-07-01 (longtext)\n" +
-			"                 │   │   └─ LessThan\n" +
-			"                 │   │       ├─ orders.o_orderdate:4!null\n" +
-			"                 │   │       └─ 1993-10-01 00:00:00 +0000 UTC (datetime)\n" +
-			"                 │   └─ IndexedTableAccess(orders)\n" +
-			"                 │       ├─ index: [orders.O_ORDERKEY]\n" +
-			"                 │       ├─ static: [{[NULL, ∞)}]\n" +
-			"                 │       ├─ colSet: (1-9)\n" +
-			"                 │       ├─ tableId: 1\n" +
-			"                 │       └─ Table\n" +
-			"                 │           ├─ name: orders\n" +
-			"                 │           └─ columns: [o_orderkey o_custkey o_orderstatus o_totalprice o_orderdate o_orderpriority o_clerk o_shippriority o_comment]\n" +
-			"                 └─ Distinct\n" +
-			"                     └─ Project\n" +
-			"                         ├─ columns: [lineitem.l_orderkey:0!null]\n" +
-			"                         └─ Filter\n" +
-			"                             ├─ LessThan\n" +
-			"                             │   ├─ lineitem.l_commitdate:11!null\n" +
-			"                             │   └─ lineitem.l_receiptdate:12!null\n" +
-			"                             └─ IndexedTableAccess(lineitem)\n" +
-			"                                 ├─ index: [lineitem.L_ORDERKEY,lineitem.L_LINENUMBER]\n" +
-			"                                 ├─ static: [{[NULL, ∞), [NULL, ∞)}]\n" +
-			"                                 ├─ colSet: (10-25)\n" +
-			"                                 ├─ tableId: 2\n" +
-			"                                 └─ Table\n" +
-			"                                     ├─ name: lineitem\n" +
-			"                                     └─ columns: [l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment]\n" +
+			"         └─ SemiLookupJoin\n" +
+			"             ├─ Filter\n" +
+			"             │   ├─ AND\n" +
+			"             │   │   ├─ GreaterThanOrEqual\n" +
+			"             │   │   │   ├─ orders.o_orderdate:4!null\n" +
+			"             │   │   │   └─ 1993-07-01 (longtext)\n" +
+			"             │   │   └─ LessThan\n" +
+			"             │   │       ├─ orders.o_orderdate:4!null\n" +
+			"             │   │       └─ 1993-10-01 00:00:00 +0000 UTC (datetime)\n" +
+			"             │   └─ ProcessTable\n" +
+			"             │       └─ Table\n" +
+			"             │           ├─ name: orders\n" +
+			"             │           └─ columns: [o_orderkey o_custkey o_orderstatus o_totalprice o_orderdate o_orderpriority o_clerk o_shippriority o_comment]\n" +
+			"             └─ Filter\n" +
+			"                 ├─ LessThan\n" +
+			"                 │   ├─ lineitem.l_commitdate:11!null\n" +
+			"                 │   └─ lineitem.l_receiptdate:12!null\n" +
+			"                 └─ IndexedTableAccess(lineitem)\n" +
+			"                     ├─ index: [lineitem.L_ORDERKEY,lineitem.L_LINENUMBER]\n" +
+			"                     ├─ keys: [orders.o_orderkey:0!null]\n" +
+			"                     ├─ colSet: (10-25)\n" +
+			"                     ├─ tableId: 2\n" +
+			"                     └─ Table\n" +
+			"                         ├─ name: lineitem\n" +
+			"                         └─ columns: [l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment]\n" +
 			"",
 		ExpectedEstimates: "Project\n" +
 			" ├─ columns: [orders.o_orderpriority, count(1) as order_count]\n" +
@@ -568,24 +556,17 @@ order by
 			"     └─ GroupBy\n" +
 			"         ├─ select: COUNT(1), orders.o_orderpriority\n" +
 			"         ├─ group: orders.o_orderpriority\n" +
-			"         └─ Project\n" +
-			"             ├─ columns: [orders.O_ORDERKEY, orders.O_CUSTKEY, orders.O_ORDERSTATUS, orders.O_TOTALPRICE, orders.O_ORDERDATE, orders.O_ORDERPRIORITY, orders.O_CLERK, orders.O_SHIPPRIORITY, orders.O_COMMENT]\n" +
-			"             └─ MergeJoin (estimated cost=1725.500 rows=850)\n" +
-			"                 ├─ cmp: (orders.o_orderkey = lineitem.l_orderkey)\n" +
-			"                 ├─ Filter\n" +
-			"                 │   ├─ ((orders.o_orderdate >= '1993-07-01') AND (orders.o_orderdate < '1993-10-01 00:00:00'))\n" +
-			"                 │   └─ IndexedTableAccess(orders)\n" +
-			"                 │       ├─ index: [orders.O_ORDERKEY]\n" +
-			"                 │       └─ filters: [{[NULL, ∞)}]\n" +
-			"                 └─ Distinct\n" +
-			"                     └─ Project\n" +
-			"                         ├─ columns: [lineitem.l_orderkey]\n" +
-			"                         └─ Filter\n" +
-			"                             ├─ (lineitem.l_commitdate < lineitem.l_receiptdate)\n" +
-			"                             └─ IndexedTableAccess(lineitem)\n" +
-			"                                 ├─ index: [lineitem.L_ORDERKEY,lineitem.L_LINENUMBER]\n" +
-			"                                 ├─ filters: [{[NULL, ∞), [NULL, ∞)}]\n" +
-			"                                 └─ columns: [l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment]\n" +
+			"         └─ SemiLookupJoin (estimated cost=2856.667 rows=850)\n" +
+			"             ├─ Filter\n" +
+			"             │   ├─ ((orders.o_orderdate >= '1993-07-01') AND (orders.o_orderdate < '1993-10-01 00:00:00'))\n" +
+			"             │   └─ Table\n" +
+			"             │       └─ name: orders\n" +
+			"             └─ Filter\n" +
+			"                 ├─ (lineitem.l_commitdate < lineitem.l_receiptdate)\n" +
+			"                 └─ IndexedTableAccess(lineitem)\n" +
+			"                     ├─ index: [lineitem.L_ORDERKEY,lineitem.L_LINENUMBER]\n" +
+			"                     ├─ columns: [l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment]\n" +
+			"                     └─ keys: orders.o_orderkey\n" +
 			"",
 		ExpectedAnalysis: "Project\n" +
 			" ├─ columns: [orders.o_orderpriority, count(1) as order_count]\n" +
@@ -593,24 +574,17 @@ order by
 			"     └─ GroupBy\n" +
 			"         ├─ select: COUNT(1), orders.o_orderpriority\n" +
 			"         ├─ group: orders.o_orderpriority\n" +
-			"         └─ Project\n" +
-			"             ├─ columns: [orders.O_ORDERKEY, orders.O_CUSTKEY, orders.O_ORDERSTATUS, orders.O_TOTALPRICE, orders.O_ORDERDATE, orders.O_ORDERPRIORITY, orders.O_CLERK, orders.O_SHIPPRIORITY, orders.O_COMMENT]\n" +
-			"             └─ MergeJoin (estimated cost=1725.500 rows=850) (actual rows=0 loops=1)\n" +
-			"                 ├─ cmp: (orders.o_orderkey = lineitem.l_orderkey)\n" +
-			"                 ├─ Filter\n" +
-			"                 │   ├─ ((orders.o_orderdate >= '1993-07-01') AND (orders.o_orderdate < '1993-10-01 00:00:00'))\n" +
-			"                 │   └─ IndexedTableAccess(orders)\n" +
-			"                 │       ├─ index: [orders.O_ORDERKEY]\n" +
-			"                 │       └─ filters: [{[NULL, ∞)}]\n" +
-			"                 └─ Distinct\n" +
-			"                     └─ Project\n" +
-			"                         ├─ columns: [lineitem.l_orderkey]\n" +
-			"                         └─ Filter\n" +
-			"                             ├─ (lineitem.l_commitdate < lineitem.l_receiptdate)\n" +
-			"                             └─ IndexedTableAccess(lineitem)\n" +
-			"                                 ├─ index: [lineitem.L_ORDERKEY,lineitem.L_LINENUMBER]\n" +
-			"                                 ├─ filters: [{[NULL, ∞), [NULL, ∞)}]\n" +
-			"                                 └─ columns: [l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment]\n" +
+			"         └─ SemiLookupJoin (estimated cost=2856.667 rows=850) (actual rows=0 loops=1)\n" +
+			"             ├─ Filter\n" +
+			"             │   ├─ ((orders.o_orderdate >= '1993-07-01') AND (orders.o_orderdate < '1993-10-01 00:00:00'))\n" +
+			"             │   └─ Table\n" +
+			"             │       └─ name: orders\n" +
+			"             └─ Filter\n" +
+			"                 ├─ (lineitem.l_commitdate < lineitem.l_receiptdate)\n" +
+			"                 └─ IndexedTableAccess(lineitem)\n" +
+			"                     ├─ index: [lineitem.L_ORDERKEY,lineitem.L_LINENUMBER]\n" +
+			"                     ├─ columns: [l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment]\n" +
+			"                     └─ keys: orders.o_orderkey\n" +
 			"",
 	},
 	{

@@ -1864,6 +1864,37 @@ join uv d on d.u = c.x`,
 			},
 		},
 	},
+	{
+		// An IN subquery is looked up from its distinct values through a non-unique index: each
+		// subquery value is read once, so each row of the indexed table is returned once, though the
+		// subquery repeats values and several rows of the indexed table share one.
+		name: "right semi lookup join through a non-unique index",
+		setup: []string{
+			"create table xy (x int primary key, y int, index y_idx (y));",
+			"create table uv (u int primary key, v int);",
+			"create table ab (a int primary key, b int);",
+			"insert into xy values (1,1), (2,1), (3,2), (4,3), (5,null), (6,4);",
+			"insert into uv values (1,0), (2,0), (3,1), (4,0);",
+			"insert into ab values (1,1), (2,1), (3,null), (4,3), (5,5), (6,2), (7,2);",
+			`analyze table xy update histogram on x using data '{"row_count":100}'`,
+			`analyze table uv update histogram on u using data '{"row_count":1000}'`,
+			`analyze table ab update histogram on a using data '{"row_count":1000}'`,
+		},
+		tests: []JoinPlanTest{
+			{
+				q:       "select x, u from xy join uv on u = y where y in (select b from ab) and v = 0 order by x;",
+				types:   []plan.JoinType{plan.JoinTypeLookup, plan.JoinTypeLookup},
+				indexes: []string{"y_idx", "primary"},
+				exp:     []sql.Row{{1, 1}, {2, 1}, {3, 2}},
+			},
+			{
+				q:       "select x from xy where y in (select b from ab) order by x;",
+				types:   []plan.JoinType{plan.JoinTypeLookup},
+				indexes: []string{"y_idx"},
+				exp:     []sql.Row{{1}, {2}, {3}, {4}},
+			},
+		},
+	},
 }
 
 func TestJoinPlanning(t *testing.T, harness Harness) {
