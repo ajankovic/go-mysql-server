@@ -290,6 +290,63 @@ func TestRightSemiLookupJoinPartialIndexEligibility(t *testing.T) {
 	}
 }
 
+// TestRightSemiLookupJoinNonUniqueIndex verifies that the reversed semi join looks the left rows up
+// through a non-unique index when the filter equates every right column it reads to a left value of
+// the same type, and only then.
+func TestRightSemiLookupJoinNonUniqueIndex(t *testing.T) {
+	fk := expression.NewGetFieldWithTable(21, 10, types.Int64, "db", "t1", "fk", true)
+	pk := expression.NewGetFieldWithTable(20, 10, types.Int64, "db", "t1", "pk", false)
+	rightPk := expression.NewGetFieldWithTable(23, 11, types.Int64, "db", "t2", "pk", false)
+	rightVal := expression.NewGetFieldWithTable(24, 11, types.Int64, "db", "t2", "val", true)
+	rightName := expression.NewGetFieldWithTable(25, 11, types.Text, "db", "t2", "name", true)
+	for _, tt := range []struct {
+		name         string
+		filter       sql.Expression
+		expectLookup bool
+	}{
+		{
+			name:         "every right column equated to a left value",
+			filter:       expression.NewEquals(fk, rightVal),
+			expectLookup: true,
+		},
+		{
+			name:         "equated in reverse",
+			filter:       expression.NewEquals(rightVal, fk),
+			expectLookup: true,
+		},
+		{
+			name:         "right columns read through arithmetic",
+			filter:       expression.NewEquals(fk, expression.NewPlus(rightPk, rightVal)),
+			expectLookup: false,
+		},
+		{
+			name: "a right column read only in a disjunction",
+			filter: expression.NewAnd(
+				expression.NewEquals(fk, rightPk),
+				expression.NewOr(expression.NewEquals(pk, rightVal), expression.NewEquals(pk, expression.NewLiteral(int64(1), types.Int64))),
+			),
+			expectLookup: false,
+		},
+		{
+			name:         "equated to a value of another type",
+			filter:       expression.NewEquals(fk, rightName),
+			expectLookup: false,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db := memory.NewDatabase("db")
+			ctx := newContext(memory.NewDBProvider(db))
+			joined := plan.NewSemiJoin(ctx, mergeJoinT1(ctx, db), semiJoinT2(ctx, db), tt.filter)
+
+			m := memo.NewMemo(ctx, memory.NewStatsProv(), nil, memo.NewDefaultCoster(), nil)
+			j := memo.NewJoinOrderBuilder(m)
+			j.ReorderJoin(ctx, joined)
+			require.NoError(t, addRightSemiJoins(ctx, m, newTestCatalog(db)))
+			require.Equal(t, tt.expectLookup, lookupJoinUsesIndex(ctx, t, m, "t1_fk_idx"), m.String())
+		})
+	}
+}
+
 func TestKeyForExpr(t *testing.T) {
 	// https://github.com/dolthub/dolt/issues/12505
 	ctx := sql.NewEmptyContext()
@@ -472,6 +529,17 @@ func mergeJoinT1(ctx *sql.Context, db *memory.Database) sql.Node {
 	}
 	db.AddTable("t1", tbl)
 	return plan.NewResolvedTable(tbl, db, nil).WithId(10).WithColumns(sql.NewColSet(20, 21, 22))
+}
+
+// semiJoinT2 returns a table with a primary key on pk, keyed by no other column.
+func semiJoinT2(ctx *sql.Context, db *memory.Database) sql.Node {
+	tbl := memory.NewTable(ctx, db, "t2", sql.NewPrimaryKeySchema(sql.Schema{
+		{Name: "pk", Type: types.Int64, Nullable: false, Source: "t2", PrimaryKey: true},
+		{Name: "val", Type: types.Int64, Nullable: true, Source: "t2"},
+		{Name: "name", Type: types.Text, Nullable: true, Source: "t2"},
+	}), nil)
+	db.AddTable("t2", tbl)
+	return plan.NewResolvedTable(tbl, db, nil).WithId(11).WithColumns(sql.NewColSet(23, 24, 25))
 }
 
 // mergeJoinT2 returns a table with a primary key on pk.

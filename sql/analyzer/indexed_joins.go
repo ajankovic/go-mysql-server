@@ -739,8 +739,10 @@ func convertAntiToLeftJoin(ctx *sql.Context, m *memo.Memo) error {
 	})
 }
 
-// addRightSemiJoins allows for a reversed semiJoin operator when
-// the join attributes of the left side are provably unique.
+// addRightSemiJoins allows for a reversed semiJoin operator, a lookup join from the right side made
+// distinct into the left side, when no left row can match more than one distinct right row: when the
+// join attributes of the left side are provably unique, or when the filter fixes every right column it
+// reads to a value of the left row (see rightColumnsFixedByLeft).
 func addRightSemiJoins(ctx *sql.Context, m *memo.Memo, cat sql.Catalog) error {
 	m.Tracer.PushDebugContext("addRightSemiJoins")
 	defer m.Tracer.PopDebugContext()
@@ -799,8 +801,9 @@ func addRightSemiJoins(ctx *sql.Context, m *memo.Memo, cat sql.Catalog) error {
 		lookupFilters := slices.Concat(semi.Filter, filters)
 
 		columnIdToIndexedExprMap := buildColumnIdToIndexedExprMap(ctx, cat, leftRt, indexes)
+		rightFixed := rightColumnsFixedByLeft(ctx, semi)
 		for _, idx := range indexes {
-			if !semi.Group().RelProps.FuncDeps(ctx).ColsAreStrictKey(idx.ColSet()) {
+			if !semi.Group().RelProps.FuncDeps(ctx).ColsAreStrictKey(idx.ColSet()) && !rightFixed {
 				continue
 			}
 			if !canUsePartialIndex(idx.SqlIdx(), lookupFilters) {
@@ -833,6 +836,49 @@ func addRightSemiJoins(ctx *sql.Context, m *memo.Memo, cat sql.Catalog) error {
 		}
 		return nil
 	})
+}
+
+// rightColumnsFixedByLeft reports whether each right column |semi|'s filter reads is equated, by a
+// conjunct of the filter, to an expression of the same type that reads no right column. The reversed
+// semi join makes the right side distinct on the columns the filter reads, and every right row a left
+// row matches then equals that left row's values in those columns, in their own type, which is the
+// equality the distinct hashes by. A left row therefore matches one distinct right row at most and is
+// returned once, whichever index looks it up.
+func rightColumnsFixedByLeft(ctx *sql.Context, semi *memo.SemiJoin) bool {
+	rightTables := semi.Right.RelProps.OutputTables()
+	isRightColumn := func(e sql.Expression) (*expression.GetField, bool) {
+		gf, ok := e.(*expression.GetField)
+		return gf, ok && rightTables.Contains(int(gf.TableId()))
+	}
+	readsRight := func(e sql.Expression) bool {
+		return transform.InspectExpr(ctx, e, func(ctx *sql.Context, e sql.Expression) bool {
+			_, ok := isRightColumn(e)
+			return ok
+		})
+	}
+
+	var read, fixed sql.ColSet
+	for _, f := range semi.Filter {
+		for _, conj := range expression.SplitConjunction(ctx, f) {
+			transform.InspectExpr(ctx, conj, func(ctx *sql.Context, e sql.Expression) bool {
+				if gf, ok := isRightColumn(e); ok {
+					read.Add(gf.Id())
+				}
+				return false
+			})
+			eq, ok := conj.(*expression.Equals)
+			if !ok {
+				continue
+			}
+			for _, sides := range [2][2]sql.Expression{{eq.Left(), eq.Right()}, {eq.Right(), eq.Left()}} {
+				col, ok := isRightColumn(sides[0])
+				if ok && !readsRight(sides[1]) && col.Type(ctx).Equals(sides[1].Type(ctx)) {
+					fixed.Add(col.Id())
+				}
+			}
+		}
+	}
+	return !read.Empty() && read.SubsetOf(fixed)
 }
 
 // lookupCandidates extracts source relation information required to check for
