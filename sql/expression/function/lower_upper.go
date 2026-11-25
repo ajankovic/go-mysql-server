@@ -80,7 +80,7 @@ func (l *Lower) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.
 
 // Type implements the Expression interface.
 func (l *Lower) Type(ctx *sql.Context) sql.Type {
-	return l.Child.Type(ctx)
+	return stringResultType(ctx, l.Child)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
@@ -146,7 +146,7 @@ func (u *Upper) WithChildren(ctx *sql.Context, children ...sql.Expression) (sql.
 
 // Type implements the Expression interface.
 func (u *Upper) Type(ctx *sql.Context) sql.Type {
-	return u.Child.Type(ctx)
+	return stringResultType(ctx, u.Child)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

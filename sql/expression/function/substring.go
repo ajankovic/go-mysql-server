@@ -180,7 +180,7 @@ func (s *Substring) Resolved() bool {
 }
 
 // Type implements the Expression interface.
-func (s *Substring) Type(ctx *sql.Context) sql.Type { return s.Str.Type(ctx) }
+func (s *Substring) Type(ctx *sql.Context) sql.Type { return stringResultType(ctx, s.Str) }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (s *Substring) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -371,29 +371,15 @@ func (l Left) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var text []rune
-	switch str := str.(type) {
-	case string:
-		text = []rune(str)
-	case sql.StringWrapper:
-		s, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(s)
-	case []byte:
-		text = []rune(string(str))
-	case sql.BytesWrapper:
-		b, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(string(b))
-	case nil:
+	if str == nil {
 		return nil, nil
-	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
 	}
+
+	s, _, err := types.ConvertToCollatedString(ctx, str, l.str.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	text := []rune(s)
 
 	var length int64
 	runeCount := int64(len(text))
@@ -489,29 +475,15 @@ func (r Right) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		return nil, err
 	}
 
-	var text []rune
-	switch str := str.(type) {
-	case string:
-		text = []rune(str)
-	case sql.StringWrapper:
-		s, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(s)
-	case []byte:
-		text = []rune(string(str))
-	case sql.BytesWrapper:
-		b, err := str.Unwrap(ctx)
-		if err != nil {
-			return nil, err
-		}
-		text = []rune(string(b))
-	case nil:
+	if str == nil {
 		return nil, nil
-	default:
-		return nil, sql.ErrInvalidType.New(reflect.TypeOf(str).String())
 	}
+
+	s, _, err := types.ConvertToCollatedString(ctx, str, r.str.Type(ctx))
+	if err != nil {
+		return nil, err
+	}
+	text := []rune(s)
 
 	var length int64
 	runeCount := int64(len(text))

@@ -153,7 +153,7 @@ func (t *Trim) Resolved() bool {
 	return t.str.Resolved() && t.pat.Resolved() && t.pat.Resolved()
 }
 
-func (t *Trim) Type(ctx *sql.Context) sql.Type { return t.str.Type(ctx) }
+func (t *Trim) Type(ctx *sql.Context) sql.Type { return stringResultType(ctx, t.str) }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (t *Trim) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -190,7 +190,7 @@ func (t *LeftTrim) Description() string {
 	return "returns the string str with leading space characters removed."
 }
 
-func (t *LeftTrim) Type(ctx *sql.Context) sql.Type { return t.Child.Type(ctx) }
+func (t *LeftTrim) Type(ctx *sql.Context) sql.Type { return stringResultType(ctx, t.Child) }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (t *LeftTrim) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
@@ -259,7 +259,7 @@ func (t *RightTrim) Description() string {
 	return "returns the string str with trailing space characters removed."
 }
 
-func (t *RightTrim) Type(ctx *sql.Context) sql.Type { return t.Child.Type(ctx) }
+func (t *RightTrim) Type(ctx *sql.Context) sql.Type { return stringResultType(ctx, t.Child) }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.
 func (t *RightTrim) CollationCoercibility(ctx *sql.Context) (collation sql.CollationID, coercibility byte) {
