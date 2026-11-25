@@ -786,6 +786,12 @@ func (c *Crc32) Eval(ctx *sql.Context, row sql.Row) (interface{}, error) {
 		} else {
 			bytes = []byte{0}
 		}
+	case time.Time, types.Timespan:
+		s, _, err := types.ConvertToCollatedString(ctx, val, c.Child.Type(ctx))
+		if err != nil {
+			return nil, err
+		}
+		bytes = []byte(s)
 	default:
 		return nil, sql.ErrInvalidArgumentDetails.New("crc32", fmt.Sprint(arg))
 	}

@@ -95,7 +95,7 @@ func (r *Reverse) WithChildren(ctx *sql.Context, children ...sql.Expression) (sq
 
 // Type implements the Expression interface.
 func (r *Reverse) Type(ctx *sql.Context) sql.Type {
-	return r.Child.Type(ctx)
+	return stringResultType(ctx, r.Child)
 }
 
 // CollationCoercibility implements the interface sql.CollationCoercible.

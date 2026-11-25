@@ -137,6 +137,7 @@ func TestInstr(t *testing.T) {
 		{"multiple matches", sql.NewRow("bobobo", "bo"), 1, false},
 		{name: "numeric string", row: sql.NewRow(1, "hello"), expected: 0},
 		{name: "numeric substr", row: sql.NewRow("foo", 1), expected: 0},
+		{name: "number substr", row: sql.NewRow("a1", 1), expected: 2},
 	}
 
 	for _, tt := range testCases {
@@ -226,7 +227,7 @@ func TestLeft(t *testing.T) {
 		{"len == 0", sql.NewRow("foo", 0), "", false},
 		{"len < 0", sql.NewRow("foo", -1), "", false},
 		{"len < string.len", sql.NewRow("foo", 2), "fo", false},
-		{"bad string type", sql.NewRow(1, 1), "", true},
+		{"number string", sql.NewRow(12, 1), "1", false},
 		{"bad len type", sql.NewRow("hello", "hello"), "", true},
 	}
 
@@ -267,7 +268,7 @@ func TestRight(t *testing.T) {
 		{"len == 0", sql.NewRow("foo", 0), "", false},
 		{"len < 0", sql.NewRow("foo", -1), "", false},
 		{"len < string.len", sql.NewRow("foo", 2), "oo", false},
-		{"bad string type", sql.NewRow(1, 1), "", true},
+		{"number string", sql.NewRow(12, 1), "2", false},
 		{"bad len type", sql.NewRow("hello", "hello"), "", true},
 	}
 

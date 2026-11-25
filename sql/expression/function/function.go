@@ -84,6 +84,18 @@ func evalInt64(ctx *sql.Context, expr sql.Expression, row sql.Row) (int64, bool,
 	return n, ok, nil
 }
 
+// stringResultType returns the type of a function whose result is its argument |arg| transformed as text. A string
+// argument keeps its type, and with it its length and collation. Any other argument, such as a number or a time, is
+// read as text, so the result is LONGTEXT; the argument's own type would read that text back as a number or a time.
+// ENUM and SET keep their type too: most of these functions read such a value as its number, which that type turns
+// back into its label.
+func stringResultType(ctx *sql.Context, arg sql.Expression) sql.Type {
+	if typ := arg.Type(ctx); types.IsText(typ) || types.IsEnum(typ) || types.IsSet(typ) {
+		return typ
+	}
+	return types.LongText
+}
+
 // evalString evaluates |expr| against |row| and coerces the result
 // to a string in the given target collation. It returns ("", false, nil)
 // if the evaluated value is SQL NULL.

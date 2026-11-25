@@ -30,11 +30,12 @@ func TestLower(t *testing.T) {
 		rowType  sql.Type
 		row      sql.Row
 		expected interface{}
+		typ      sql.Type
 	}{
-		{"text nil", types.LongText, sql.NewRow(nil), nil},
-		{"text ok", types.LongText, sql.NewRow("LoWeR"), "lower"},
-		{"binary ok", types.Blob, sql.NewRow([]byte("LoWeR")), "LoWeR"},
-		{"other type", types.Int32, sql.NewRow(int32(1)), "1"},
+		{"text nil", types.LongText, sql.NewRow(nil), nil, types.LongText},
+		{"text ok", types.LongText, sql.NewRow("LoWeR"), "lower", types.LongText},
+		{"binary ok", types.Blob, sql.NewRow([]byte("LoWeR")), "LoWeR", types.Blob},
+		{"other type", types.Int32, sql.NewRow(int32(1)), "1", types.LongText},
 	}
 
 	for _, tt := range testCases {
@@ -47,7 +48,7 @@ func TestLower(t *testing.T) {
 
 		req := require.New(t)
 		req.True(f.IsNullable(ctx))
-		req.Equal(tt.rowType, f.Type(ctx))
+		req.Equal(tt.typ, f.Type(ctx))
 	}
 }
 
@@ -57,11 +58,12 @@ func TestUpper(t *testing.T) {
 		rowType  sql.Type
 		row      sql.Row
 		expected interface{}
+		typ      sql.Type
 	}{
-		{"text nil", types.LongText, sql.NewRow(nil), nil},
-		{"text ok", types.LongText, sql.NewRow("UpPeR"), "UPPER"},
-		{"binary ok", types.Blob, sql.NewRow([]byte("UpPeR")), "UpPeR"},
-		{"other type", types.Int32, sql.NewRow(int32(1)), "1"},
+		{"text nil", types.LongText, sql.NewRow(nil), nil, types.LongText},
+		{"text ok", types.LongText, sql.NewRow("UpPeR"), "UPPER", types.LongText},
+		{"binary ok", types.Blob, sql.NewRow([]byte("UpPeR")), "UpPeR", types.Blob},
+		{"other type", types.Int32, sql.NewRow(int32(1)), "1", types.LongText},
 	}
 
 	for _, tt := range testCases {
@@ -74,6 +76,6 @@ func TestUpper(t *testing.T) {
 
 		req := require.New(t)
 		req.True(f.IsNullable(ctx))
-		req.Equal(tt.rowType, f.Type(ctx))
+		req.Equal(tt.typ, f.Type(ctx))
 	}
 }
